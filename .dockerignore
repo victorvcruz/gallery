@@ -1,0 +1,6 @@
+node_modules
+.next
+.git
+.gallery-cache
+.env.local
+.DS_Store

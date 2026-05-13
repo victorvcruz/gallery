@@ -1,0 +1,10 @@
+services:
+  gallery:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - /path/to/your/photos:/photos:ro
+    environment:
+      - GALLERY_ROOT=/photos
+    restart: unless-stopped

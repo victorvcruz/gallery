@@ -1,36 +1,240 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Gallery
 
-## Getting Started
+A photography portfolio web app that reads directly from your filesystem. Point it at any folder structure and it becomes a navigable gallery with justified image grids, full-resolution zoom, and EXIF metadata display.
 
-First, run the development server:
+Built for high-resolution images from professional cameras (Sony Alpha, Canon, Nikon, Fuji, etc.) — handles RAW-edited exports at maximum quality without compromising browser performance.
+
+## Quick Start
 
 ```bash
+# Install dependencies
+npm install
+
+# Run in development (pass your photos directory)
+GALLERY_ROOT=/path/to/your/photos npm run dev
+
+# Or set it in .env.local
+echo "GALLERY_ROOT=/path/to/your/photos" > .env.local
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## How It Works
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+The application is completely agnostic to your folder structure. It reads from the root directory defined by `GALLERY_ROOT` and recursively navigates whatever folders and images it finds.
 
-## Learn More
+### Folder Navigation
 
-To learn more about Next.js, take a look at the following resources:
+- Each subdirectory becomes an **album** displayed as a card with a banner image
+- The banner is the **first image found alphabetically** in that folder (or its subfolders)
+- Nested folders are fully supported — navigate as deep as your structure goes
+- The breadcrumb in the header allows navigating back to any parent level
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Example Structure
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+/photos/
+├── Ubatuba/
+│   ├── Dia 1/
+│   │   ├── DSC06687.jpg
+│   │   ├── DSC06690.jpg
+│   │   └── ...
+│   ├── Dia 2/
+│   └── Dia 3/
+├── Florianopolis/
+│   ├── praia.jpg
+│   └── centro/
+│       └── IMG_001.jpg
+└── Retratos/
+    └── session_01.jpg
+```
 
-## Deploy on Vercel
+You never need to configure anything in the app itself — just organize your files in Finder/Explorer and refresh the browser.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Features
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### Justified Grid (Lightroom-style)
+
+Images are displayed in a justified grid that adapts to each image's native aspect ratio. No cropping, no fixed cells — each row fills the container width while maintaining correct proportions.
+
+### Image Viewer
+
+Click any image to open a fullscreen viewer with:
+
+- **Keyboard navigation**: Left/Right arrows to move between images, Escape to close
+- **Click navigation**: Click the left/right edges of the screen
+- **Swipe navigation**: Swipe on touch devices
+- **Zoom**: Scroll wheel or trackpad pinch, centered on cursor position
+- **Double-click**: Toggle between fit-to-screen and 2.5x zoom
+- **Pan**: When zoomed in, drag to move around the image
+- **EXIF bar**: Aperture, shutter speed, ISO, focal length, and capture date displayed at the bottom
+
+### Sort Order
+
+Images can be sorted by:
+
+- **Capture Date** — from EXIF metadata (default)
+- **Created Date** — file creation date on disk
+- **File Name** — alphabetical order
+
+Click the same sort option again to toggle ascending/descending.
+
+### Progressive Loading
+
+To handle large images (30–60MB each) without blocking the UI:
+
+1. **Grid**: A shimmer placeholder appears → thumbnail (800px) loads via IntersectionObserver
+2. **Modal**: Thumbnail is visible immediately → preview (2400px) loads in background
+3. **Zoom**: Preview is visible → full resolution loads on first zoom interaction
+
+Images that scroll out of view are **unloaded from memory** to prevent RAM exhaustion on galleries with hundreds of photos.
+
+## Image Processing & Cache
+
+### Thumbnail Generation
+
+Thumbnails are generated **on-the-fly** the first time an image is requested, then cached to disk:
+
+| Tier | Max dimension | Quality | Use case |
+|------|--------------|---------|----------|
+| `thumb` | 800px | 80% JPEG | Grid view |
+| `preview` | 2400px | 85% JPEG | Modal view |
+| `full` | Original | Original | Zoom |
+
+All resized images use `mozjpeg` encoding for optimal quality/size ratio and include automatic EXIF orientation correction.
+
+### Cache Location
+
+```
+<GALLERY_ROOT>/.gallery-cache/
+├── thumb/      # 800px thumbnails
+└── preview/    # 2400px previews
+```
+
+The cache lives inside your photos directory. Add `.gallery-cache` to your backup exclusion list if desired.
+
+### Cache Invalidation
+
+- **TTL**: Cached files expire after **1 day** and are automatically cleaned up
+- **Source change detection**: If the original file is modified (newer mtime), the cached version is regenerated
+- **Refresh sync**: Every page load reads the filesystem fresh — added/removed files appear on browser refresh
+- **In-memory metadata**: Image dimensions and EXIF data are cached in memory for 1 hour, then re-read from disk
+
+### Manual Cache Clear
+
+Delete the cache directory at any time:
+
+```bash
+rm -rf /path/to/your/photos/.gallery-cache
+```
+
+Thumbnails will be regenerated on next access.
+
+## Supported File Formats
+
+### Fully Supported (displayed + thumbnails generated)
+
+| Extension | Format |
+|-----------|--------|
+| `.jpg`, `.jpeg` | JPEG |
+| `.png` | PNG |
+| `.webp` | WebP |
+| `.avif` | AVIF |
+| `.tiff`, `.tif` | TIFF |
+| `.heic`, `.heif` | HEIC/HEIF (Apple) |
+
+### RAW Formats (thumbnail generation supported via libvips/sharp)
+
+| Extension | Camera |
+|-----------|--------|
+| `.arw` | Sony |
+| `.cr2`, `.cr3` | Canon |
+| `.nef` | Nikon |
+| `.dng` | Adobe DNG / Leica / others |
+| `.raf` | Fujifilm |
+| `.orf` | Olympus |
+| `.rw2` | Panasonic |
+
+> Note: RAW support depends on your system's libvips build. Most common RAW formats work out of the box with sharp on macOS and Linux.
+
+### Ignored Files
+
+- Files starting with `.` (hidden files, macOS resource forks like `._DSC001.jpg`)
+- Directories starting with `.` (`.gallery-cache`, `.DS_Store`, etc.)
+- Non-image files (videos, documents, etc.) are silently skipped
+
+## Configuration
+
+| Environment Variable | Required | Description |
+|---------------------|----------|-------------|
+| `GALLERY_ROOT` | Yes | Absolute path to your photos root directory |
+
+Set it in `.env.local` for persistent configuration:
+
+```
+GALLERY_ROOT=/Volumes/Photos/Lightroom Exports
+```
+
+## Production Deployment
+
+### Docker (recommended for home server)
+
+```bash
+# Edit docker-compose.yml and set the path to your photos
+# Then:
+docker compose up -d
+```
+
+In `docker-compose.yml`, change the volume mount to your photos directory:
+
+```yaml
+volumes:
+  - /mnt/photos:/photos:ro   # <-- your photos path here
+```
+
+The `:ro` flag mounts read-only (the app never writes to your photos directory).
+
+Build and run manually without compose:
+
+```bash
+docker build -t gallery .
+docker run -d \
+  -p 3000:3000 \
+  -v /path/to/your/photos:/photos:ro \
+  -e GALLERY_ROOT=/photos \
+  --name gallery \
+  --restart unless-stopped \
+  gallery
+```
+
+### Without Docker
+
+```bash
+# Build for production
+npm run build
+
+# Start production server
+GALLERY_ROOT=/path/to/photos npm start
+```
+
+The production server runs on port 3000 by default and listens on all network interfaces (`0.0.0.0`), accessible from any device on the same network.
+
+### Network Access
+
+The app binds to `0.0.0.0` by default, so any device on the same local network can access it at:
+
+```
+http://<server-ip>:3000
+```
+
+Use a reverse proxy (nginx, Caddy) for HTTPS and custom domains.
+
+## Tech Stack
+
+- **Next.js 16** — App Router, API routes, React Server Components
+- **TypeScript** — Full type safety
+- **Tailwind CSS 4** — Styling
+- **sharp** — Image processing (resize, format conversion, EXIF reading)
+- **exif-reader** — EXIF metadata parsing (aperture, shutter, ISO, lens, etc.)
+- **justified-layout** — Flickr's justified grid algorithm
