@@ -104,6 +104,16 @@ async function getImageInfo(
       exif = parseExifBuffer(metadata.exif);
     }
 
+    // sharp.metadata() reports stored (pre-rotation) dimensions. If EXIF
+    // orientation implies a 90°/270° rotation, the displayed aspect ratio is
+    // transposed — swap so the justified grid lays out portrait shots correctly.
+    let width = metadata.width;
+    let height = metadata.height;
+    const orientation = metadata.orientation ?? 1;
+    if (orientation >= 5 && orientation <= 8) {
+      [width, height] = [height, width];
+    }
+
     // For DNGs sharp only surfaces the tiny embedded EXIF thumbnail (e.g. 256x171),
     // but its aspect ratio matches the full sensor — that's all the justified grid
     // needs. Keeping the numbers small avoids extracting the multi-MB preview
@@ -111,8 +121,8 @@ async function getImageInfo(
     const info: ImageInfo = {
       name: path.basename(filePath),
       path: relativePath,
-      width: metadata.width,
-      height: metadata.height,
+      width,
+      height,
       exif,
       captureDate: exif.captureDate || undefined,
       createdDate: stat.birthtime.toISOString(),

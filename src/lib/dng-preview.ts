@@ -5,6 +5,10 @@ export interface DngPreview {
   buffer: Buffer;
   width: number;
   height: number;
+  /** EXIF orientation from the DNG's IFD0 (1-8). The extracted preview
+   *  buffer itself usually doesn't carry orientation EXIF, so callers must
+   *  apply this rotation explicitly. */
+  orientation: number;
 }
 
 interface CacheEntry {
@@ -17,6 +21,27 @@ const cache = new Map<string, CacheEntry>();
 
 const SOI_PREFIX = Buffer.from([0xff, 0xd8, 0xff]);
 const EOI = Buffer.from([0xff, 0xd9]);
+
+/** Read the Orientation tag (0x0112) from a DNG/TIFF's IFD0 without decoding
+ *  the whole file. Returns 1 (normal) on parse failure. */
+function readTiffOrientation(buf: Buffer): number {
+  try {
+    const byteOrder = buf.readUInt16LE(0);
+    const le = byteOrder === 0x4949;
+    const r16 = (o: number) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o));
+    const r32 = (o: number) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
+    if (r16(2) !== 0x2a) return 1;
+    const ifd0 = r32(4);
+    const n = r16(ifd0);
+    for (let i = 0; i < n; i++) {
+      const entry = ifd0 + 2 + i * 12;
+      if (r16(entry) === 0x0112) return r16(entry + 8);
+    }
+  } catch {
+    // fall through
+  }
+  return 1;
+}
 
 function findEmbeddedJpegChunks(buf: Buffer): { offset: number; size: number }[] {
   const chunks: { offset: number; size: number }[] = [];
@@ -53,6 +78,7 @@ export async function extractDngPreview(
   if (cached && cached.mtime === mtime) return cached.preview;
 
   const buf = await fs.readFile(filePath);
+  const orientation = readTiffOrientation(buf);
   const candidates = findEmbeddedJpegChunks(buf);
 
   let best: DngPreview | null = null;
@@ -69,6 +95,7 @@ export async function extractDngPreview(
           buffer: Buffer.from(chunk),
           width: m.width,
           height: m.height,
+          orientation,
         };
       }
     } catch {

@@ -88,13 +88,26 @@ export async function getProcessedImage(
   await ensureDir(config.cacheDir());
 
   let source: string | Buffer = absPath;
+  let dngRotation: number | null = null;
   if (isRaw && path.extname(absPath).toLowerCase() === ".dng") {
     const srcStat = await fs.stat(absPath);
     const preview = await extractDngPreview(absPath, srcStat.mtimeMs);
-    if (preview) source = preview.buffer;
+    if (preview) {
+      source = preview.buffer;
+      // The embedded preview JPEG usually lacks its own EXIF orientation, so
+      // sharp's .rotate() no-op won't apply the DNG's IFD0 orientation.
+      // Translate EXIF orientation → CW rotation degrees.
+      switch (preview.orientation) {
+        case 3: dngRotation = 180; break;
+        case 6: dngRotation = 90; break;
+        case 8: dngRotation = 270; break;
+        default: dngRotation = 0;
+      }
+    }
   }
 
-  let pipeline = sharp(source, { failOn: "none" }).rotate();
+  let pipeline = sharp(source, { failOn: "none" });
+  pipeline = dngRotation !== null ? pipeline.rotate(dngRotation) : pipeline.rotate();
 
   if (config.maxDimension) {
     pipeline = pipeline.resize(config.maxDimension, config.maxDimension, {
