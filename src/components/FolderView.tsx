@@ -1,12 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import Header from "./Header";
 import AlbumGrid from "./AlbumGrid";
 import JustifiedGrid from "./JustifiedGrid";
 import SortControl from "./SortControl";
+import GroupControl from "./GroupControl";
 import ImageViewer from "./ImageViewer";
-import { FolderData, ImageInfo, SortOrder, SortDirection } from "@/lib/types";
+import {
+  FolderData,
+  GroupBy,
+  SortDirection,
+  SortOrder,
+} from "@/lib/types";
+import { groupImages } from "@/lib/date-groups";
 
 interface FolderViewProps {
   path: string;
@@ -17,6 +24,7 @@ export default function FolderView({ path }: FolderViewProps) {
   const [loading, setLoading] = useState(true);
   const [sort, setSort] = useState<SortOrder>("captureDate");
   const [direction, setDirection] = useState<SortDirection>("asc");
+  const [groupBy, setGroupBy] = useState<GroupBy>("none");
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
@@ -56,7 +64,29 @@ export default function FolderView({ path }: FolderViewProps) {
     setViewerIndex(index);
   };
 
-  const hasImages = data && data.images.length > 0;
+  const groups = useMemo(
+    () => (data ? groupImages(data.images, groupBy, direction) : []),
+    [data, groupBy, direction]
+  );
+
+  const flatImages = useMemo(
+    () => groups.flatMap((g) => g.images),
+    [groups]
+  );
+
+  // Precompute the flat-index offset for each group so a local click within
+  // a group can be translated to the ImageViewer's global index.
+  const groupOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let running = 0;
+    for (const g of groups) {
+      offsets.push(running);
+      running += g.images.length;
+    }
+    return offsets;
+  }, [groups]);
+
+  const hasImages = flatImages.length > 0;
 
   return (
     <div className="min-h-screen">
@@ -82,24 +112,49 @@ export default function FolderView({ path }: FolderViewProps) {
 
             {hasImages && (
               <section>
-                <div className="px-4 sm:px-6 py-3 flex items-center justify-between">
+                <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
                   <span className="text-xs text-[var(--text-muted)]">
-                    {data.images.length} photo{data.images.length !== 1 ? "s" : ""}
+                    {flatImages.length} foto{flatImages.length !== 1 ? "s" : ""}
                   </span>
-                  <SortControl
-                    sort={sort}
-                    direction={direction}
-                    onChange={handleSortChange}
-                  />
+                  <div className="flex items-center gap-4 flex-wrap">
+                    <GroupControl groupBy={groupBy} onChange={setGroupBy} />
+                    <SortControl
+                      sort={sort}
+                      direction={direction}
+                      onChange={handleSortChange}
+                    />
+                  </div>
                 </div>
-                <JustifiedGrid
-                  images={data.images}
-                  onImageClick={handleImageClick}
-                />
+
+                {groupBy === "none" ? (
+                  <JustifiedGrid
+                    images={flatImages}
+                    onImageClick={handleImageClick}
+                  />
+                ) : (
+                  groups.map((group, gi) => (
+                    <div key={group.key} className="mb-8">
+                      <div className="sticky top-[104px] z-20 bg-[var(--bg-primary)]/90 backdrop-blur-sm px-4 sm:px-6 py-2 flex items-baseline gap-3 border-b border-[var(--border-color)]">
+                        <h2 className="text-sm font-medium text-[var(--text-primary)]">
+                          {group.label}
+                        </h2>
+                        <span className="text-[11px] text-[var(--text-muted)]">
+                          {group.images.length} foto{group.images.length !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                      <JustifiedGrid
+                        images={group.images}
+                        onImageClick={(localIdx) =>
+                          handleImageClick(groupOffsets[gi] + localIdx)
+                        }
+                      />
+                    </div>
+                  ))
+                )}
               </section>
             )}
 
-            {!data.folders.length && !data.images.length && (
+            {!data.folders.length && !hasImages && (
               <div className="flex items-center justify-center h-[60vh]">
                 <p className="text-[var(--text-muted)] text-lg">
                   This folder is empty
@@ -110,9 +165,9 @@ export default function FolderView({ path }: FolderViewProps) {
         )}
       </main>
 
-      {viewerIndex !== null && data && (
+      {viewerIndex !== null && hasImages && (
         <ImageViewer
-          images={data.images}
+          images={flatImages}
           currentIndex={viewerIndex}
           onClose={handleViewerClose}
           onNavigate={handleViewerNavigate}

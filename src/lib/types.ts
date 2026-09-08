@@ -31,3 +31,10 @@ export interface FolderData {
 
 export type SortOrder = "captureDate" | "createdDate" | "fileName";
 export type SortDirection = "asc" | "desc";
+export type GroupBy = "none" | "day" | "month" | "year";
+
+export interface ImageGroup {
+  key: string;
+  label: string;
+  images: ImageInfo[];
+}

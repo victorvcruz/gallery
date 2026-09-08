@@ -8,6 +8,7 @@ import {
   isImageFile,
 } from "./gallery-config";
 import { parseExifBuffer, ExifData } from "./exif-reader";
+import { readDngExifFromFile } from "./dng-exif";
 
 export interface ImageInfo {
   name: string;
@@ -33,6 +34,9 @@ interface CacheEntry {
   data: ImageInfo;
 }
 
+// Bump when the shape of persisted ImageInfo changes so stale caches don't
+// hide missing fields (e.g. captureDate for DNGs added in v2).
+const META_VERSION = 2;
 const METADATA_CONCURRENCY = 8;
 const metadataCache = new Map<string, CacheEntry>();
 let metadataDirEnsured = false;
@@ -54,7 +58,12 @@ async function readDiskMeta(
 ): Promise<ImageInfo | null> {
   try {
     const raw = await fs.readFile(metaCachePath(relativePath), "utf-8");
-    const parsed = JSON.parse(raw) as { mtime: number; data: ImageInfo };
+    const parsed = JSON.parse(raw) as {
+      v?: number;
+      mtime: number;
+      data: ImageInfo;
+    };
+    if (parsed.v !== META_VERSION) return null;
     if (parsed.mtime === mtime) return parsed.data;
   } catch {
     // miss
@@ -71,7 +80,7 @@ async function writeDiskMeta(
     await ensureMetadataDir();
     await fs.writeFile(
       metaCachePath(relativePath),
-      JSON.stringify({ mtime, data })
+      JSON.stringify({ v: META_VERSION, mtime, data })
     );
   } catch {
     // best-effort
@@ -102,6 +111,10 @@ async function getImageInfo(
     let exif: ExifData = {};
     if (metadata.exif) {
       exif = parseExifBuffer(metadata.exif);
+    } else if (path.extname(filePath).toLowerCase() === ".dng") {
+      // libvips doesn't surface an EXIF buffer for DNGs — parse the TIFF
+      // IFDs ourselves so we get the real capture date, aperture, etc.
+      exif = await readDngExifFromFile(filePath);
     }
 
     // sharp.metadata() reports stored (pre-rotation) dimensions. If EXIF
