@@ -4,6 +4,8 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { ImageInfo } from "@/lib/types";
 import { useKeyboardNavigation } from "@/hooks/useKeyboardNavigation";
 import { useImageZoom } from "@/hooks/useImageZoom";
+import DownloadMenu from "./DownloadMenu";
+import { downloadSingle, DownloadFormat } from "@/lib/download-client";
 
 interface ImageViewerProps {
   images: ImageInfo[];
@@ -164,16 +166,25 @@ export default function ImageViewer({
         </button>
       )}
 
-      {/* Close button */}
-      <button
-        className="absolute top-4 right-4 z-20 text-white/60 hover:text-white transition-colors cursor-pointer"
-        onClick={handleClose}
-        aria-label="Close"
-      >
-        <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-        </svg>
-      </button>
+      {/* Top-right actions */}
+      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        <DownloadMenu
+          hint={currentImage.name}
+          onDownload={(format: DownloadFormat) =>
+            downloadSingle(currentImage.path, format)
+          }
+          buttonClassName="text-white/60 hover:text-white transition-colors cursor-pointer p-1"
+        />
+        <button
+          className="text-white/60 hover:text-white transition-colors cursor-pointer"
+          onClick={handleClose}
+          aria-label="Close"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
 
       {/* Image container */}
       <div

@@ -7,6 +7,7 @@ import JustifiedGrid from "./JustifiedGrid";
 import SortControl from "./SortControl";
 import GroupControl from "./GroupControl";
 import ImageViewer from "./ImageViewer";
+import SelectionBar from "./SelectionBar";
 import {
   FolderData,
   GroupBy,
@@ -14,6 +15,11 @@ import {
   SortOrder,
 } from "@/lib/types";
 import { groupImages } from "@/lib/date-groups";
+import {
+  DownloadFormat,
+  downloadSingle,
+  downloadZip,
+} from "@/lib/download-client";
 
 interface FolderViewProps {
   path: string;
@@ -26,6 +32,8 @@ export default function FolderView({ path }: FolderViewProps) {
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -74,8 +82,6 @@ export default function FolderView({ path }: FolderViewProps) {
     [groups]
   );
 
-  // Precompute the flat-index offset for each group so a local click within
-  // a group can be translated to the ImageViewer's global index.
   const groupOffsets = useMemo(() => {
     const offsets: number[] = [];
     let running = 0;
@@ -85,6 +91,46 @@ export default function FolderView({ path }: FolderViewProps) {
     }
     return offsets;
   }, [groups]);
+
+  const toggleSelect = useCallback((p: string) => {
+    setSelectedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  }, []);
+
+  const clearSelection = useCallback(() => {
+    setSelectedPaths(new Set());
+    setSelectionMode(false);
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedPaths(new Set(flatImages.map((i) => i.path)));
+  }, [flatImages]);
+
+  const enterSelectionMode = useCallback(() => {
+    setSelectionMode(true);
+  }, []);
+
+  const handleZipDownload = useCallback(
+    (format: DownloadFormat) => {
+      if (selectedPaths.size === 0) return;
+      // Preserve visual order of the flat list rather than iteration order of the Set.
+      const ordered = flatImages
+        .map((i) => i.path)
+        .filter((p) => selectedPaths.has(p));
+      if (ordered.length === 1) {
+        downloadSingle(ordered[0], format);
+        return;
+      }
+      const folderLabel = path || "gallery";
+      const safeName = folderLabel.replace(/[\\/]/g, "_") || "gallery";
+      downloadZip(ordered, format, `${safeName}.zip`);
+    },
+    [selectedPaths, flatImages, path]
+  );
 
   const hasImages = flatImages.length > 0;
 
@@ -117,6 +163,18 @@ export default function FolderView({ path }: FolderViewProps) {
                     {flatImages.length} foto{flatImages.length !== 1 ? "s" : ""}
                   </span>
                   <div className="flex items-center gap-4 flex-wrap">
+                    <button
+                      onClick={
+                        selectionMode ? clearSelection : enterSelectionMode
+                      }
+                      className={`text-[11px] px-2 py-1 rounded transition-colors cursor-pointer ${
+                        selectionMode
+                          ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                      }`}
+                    >
+                      {selectionMode ? "Cancelar seleção" : "Selecionar"}
+                    </button>
                     <GroupControl groupBy={groupBy} onChange={setGroupBy} />
                     <SortControl
                       sort={sort}
@@ -130,6 +188,9 @@ export default function FolderView({ path }: FolderViewProps) {
                   <JustifiedGrid
                     images={flatImages}
                     onImageClick={handleImageClick}
+                    selectionMode={selectionMode}
+                    selectedPaths={selectedPaths}
+                    onToggleSelect={toggleSelect}
                   />
                 ) : (
                   groups.map((group, gi) => (
@@ -147,6 +208,9 @@ export default function FolderView({ path }: FolderViewProps) {
                         onImageClick={(localIdx) =>
                           handleImageClick(groupOffsets[gi] + localIdx)
                         }
+                        selectionMode={selectionMode}
+                        selectedPaths={selectedPaths}
+                        onToggleSelect={toggleSelect}
                       />
                     </div>
                   ))
@@ -171,6 +235,17 @@ export default function FolderView({ path }: FolderViewProps) {
           currentIndex={viewerIndex}
           onClose={handleViewerClose}
           onNavigate={handleViewerNavigate}
+        />
+      )}
+
+      {selectedPaths.size > 0 && (
+        <SelectionBar
+          count={selectedPaths.size}
+          onDownload={handleZipDownload}
+          onClear={clearSelection}
+          onSelectAll={
+            selectedPaths.size < flatImages.length ? selectAll : undefined
+          }
         />
       )}
     </div>
