@@ -1,7 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 import sharp from "sharp";
-import { getGalleryRoot, isImageFile } from "./gallery-config";
+import {
+  getGalleryRoot,
+  getMetadataCacheDir,
+  isImageFile,
+} from "./gallery-config";
 import { parseExifBuffer, ExifData } from "./exif-reader";
 
 export interface ImageInfo {
@@ -26,18 +31,50 @@ export type SortDirection = "asc" | "desc";
 interface CacheEntry {
   mtime: number;
   data: ImageInfo;
-  cachedAt: number;
 }
 
-const METADATA_TTL_MS = 60 * 60 * 1000; // 1 hour in-memory TTL
+const METADATA_CONCURRENCY = 8;
 const metadataCache = new Map<string, CacheEntry>();
+let metadataDirEnsured = false;
 
-function pruneStaleCache() {
-  const now = Date.now();
-  for (const [key, entry] of metadataCache) {
-    if (now - entry.cachedAt > METADATA_TTL_MS) {
-      metadataCache.delete(key);
-    }
+async function ensureMetadataDir() {
+  if (metadataDirEnsured) return;
+  await fs.mkdir(getMetadataCacheDir(), { recursive: true });
+  metadataDirEnsured = true;
+}
+
+function metaCachePath(relativePath: string): string {
+  const hash = crypto.createHash("sha1").update(relativePath).digest("hex");
+  return path.join(getMetadataCacheDir(), `${hash}.json`);
+}
+
+async function readDiskMeta(
+  relativePath: string,
+  mtime: number
+): Promise<ImageInfo | null> {
+  try {
+    const raw = await fs.readFile(metaCachePath(relativePath), "utf-8");
+    const parsed = JSON.parse(raw) as { mtime: number; data: ImageInfo };
+    if (parsed.mtime === mtime) return parsed.data;
+  } catch {
+    // miss
+  }
+  return null;
+}
+
+async function writeDiskMeta(
+  relativePath: string,
+  mtime: number,
+  data: ImageInfo
+): Promise<void> {
+  try {
+    await ensureMetadataDir();
+    await fs.writeFile(
+      metaCachePath(relativePath),
+      JSON.stringify({ mtime, data })
+    );
+  } catch {
+    // best-effort
   }
 }
 
@@ -47,9 +84,16 @@ async function getImageInfo(
 ): Promise<ImageInfo | null> {
   try {
     const stat = await fs.stat(filePath);
+
     const cached = metadataCache.get(filePath);
     if (cached && cached.mtime === stat.mtimeMs) {
       return cached.data;
+    }
+
+    const disk = await readDiskMeta(relativePath, stat.mtimeMs);
+    if (disk) {
+      metadataCache.set(filePath, { mtime: stat.mtimeMs, data: disk });
+      return disk;
     }
 
     const metadata = await sharp(filePath).metadata();
@@ -60,6 +104,10 @@ async function getImageInfo(
       exif = parseExifBuffer(metadata.exif);
     }
 
+    // For DNGs sharp only surfaces the tiny embedded EXIF thumbnail (e.g. 256x171),
+    // but its aspect ratio matches the full sensor — that's all the justified grid
+    // needs. Keeping the numbers small avoids extracting the multi-MB preview
+    // during folder scans; getProcessedImage extracts it lazily on first render.
     const info: ImageInfo = {
       name: path.basename(filePath),
       path: relativePath,
@@ -70,7 +118,8 @@ async function getImageInfo(
       createdDate: stat.birthtime.toISOString(),
     };
 
-    metadataCache.set(filePath, { mtime: stat.mtimeMs, data: info, cachedAt: Date.now() });
+    metadataCache.set(filePath, { mtime: stat.mtimeMs, data: info });
+    writeDiskMeta(relativePath, stat.mtimeMs, info).catch(() => {});
     return info;
   } catch {
     metadataCache.delete(filePath);
@@ -78,43 +127,69 @@ async function getImageInfo(
   }
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i]);
+    }
+  }
+  const workers = Array.from({ length: Math.min(limit, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
 export async function scanFolder(
   relativePath: string,
   sort: SortOrder = "captureDate",
   direction: SortDirection = "asc"
 ): Promise<{ folders: FolderInfo[]; images: ImageInfo[] }> {
-  pruneStaleCache();
-
   const root = getGalleryRoot();
   const absPath = path.join(root, relativePath);
 
   const entries = await fs.readdir(absPath, { withFileTypes: true });
 
-  const folders: FolderInfo[] = [];
-  const imagePromises: Promise<ImageInfo | null>[] = [];
+  const folderEntries: string[] = [];
+  const imageFiles: { filePath: string; relPath: string }[] = [];
 
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
 
     if (entry.isDirectory()) {
-      const folderRelPath = path.join(relativePath, entry.name);
-      const banner = await findBannerImage(
-        path.join(absPath, entry.name),
-        folderRelPath
-      );
-      folders.push({
-        name: entry.name,
-        path: folderRelPath,
-        bannerImage: banner || undefined,
-      });
+      folderEntries.push(entry.name);
     } else if (entry.isFile() && isImageFile(entry.name)) {
-      const fileRelPath = path.join(relativePath, entry.name);
-      const filePath = path.join(absPath, entry.name);
-      imagePromises.push(getImageInfo(filePath, fileRelPath));
+      imageFiles.push({
+        filePath: path.join(absPath, entry.name),
+        relPath: path.join(relativePath, entry.name),
+      });
     }
   }
 
-  const imageResults = await Promise.all(imagePromises);
+  const [folders, imageResults] = await Promise.all([
+    mapWithConcurrency(folderEntries, 4, async (name) => {
+      const folderRelPath = path.join(relativePath, name);
+      const banner = await findBannerImage(
+        path.join(absPath, name),
+        folderRelPath
+      );
+      return {
+        name,
+        path: folderRelPath,
+        bannerImage: banner || undefined,
+      } as FolderInfo;
+    }),
+    mapWithConcurrency(imageFiles, METADATA_CONCURRENCY, ({ filePath, relPath }) =>
+      getImageInfo(filePath, relPath)
+    ),
+  ]);
+
   const images = imageResults.filter((img): img is ImageInfo => img !== null);
 
   folders.sort((a, b) => a.name.localeCompare(b.name));

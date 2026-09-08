@@ -1,31 +1,39 @@
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 import sharp from "sharp";
 import {
   getGalleryRoot,
   getThumbCacheDir,
   getPreviewCacheDir,
+  getFullCacheDir,
   CACHE_TTL_MS,
+  isRawFile,
 } from "./gallery-config";
+import { extractDngPreview } from "./dng-preview";
+
+sharp.cache({ memory: 512, files: 200, items: 500 });
 
 export type ImageSize = "thumb" | "preview" | "full";
 
 interface SizeConfig {
-  maxDimension: number;
+  maxDimension: number | null;
   quality: number;
   cacheDir: () => string;
 }
 
-const SIZE_CONFIGS: Record<Exclude<ImageSize, "full">, SizeConfig> = {
-  thumb: { maxDimension: 800, quality: 80, cacheDir: getThumbCacheDir },
-  preview: { maxDimension: 2400, quality: 85, cacheDir: getPreviewCacheDir },
+const SIZE_CONFIGS: Record<ImageSize, SizeConfig> = {
+  thumb: { maxDimension: 800, quality: 85, cacheDir: getThumbCacheDir },
+  preview: { maxDimension: 3200, quality: 92, cacheDir: getPreviewCacheDir },
+  full: { maxDimension: null, quality: 95, cacheDir: getFullCacheDir },
 };
 
-function getCachePath(relativePath: string, size: Exclude<ImageSize, "full">): string {
+function getCachePath(relativePath: string, size: ImageSize): string {
   const config = SIZE_CONFIGS[size];
-  const normalized = relativePath.replace(/[/\\]/g, "__");
-  const baseName = path.basename(normalized, path.extname(normalized));
-  return path.join(config.cacheDir(), `${baseName}__${normalized.length}.jpg`);
+  const hash = crypto.createHash("sha1").update(relativePath).digest("hex").slice(0, 16);
+  const baseName = path.basename(relativePath, path.extname(relativePath));
+  const safeName = baseName.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 64);
+  return path.join(config.cacheDir(), `${safeName}__${hash}.jpg`);
 }
 
 async function ensureDir(dirPath: string): Promise<void> {
@@ -46,7 +54,10 @@ export async function getProcessedImage(
 
   await fs.access(absPath);
 
-  if (size === "full") {
+  const isRaw = isRawFile(absPath);
+
+  // For non-RAW originals, stream the source bytes directly on "full".
+  if (size === "full" && !isRaw) {
     const buffer = await fs.readFile(absPath);
     const ext = path.extname(absPath).toLowerCase();
     return { buffer, contentType: getContentType(ext) };
@@ -76,13 +87,28 @@ export async function getProcessedImage(
   const config = SIZE_CONFIGS[size];
   await ensureDir(config.cacheDir());
 
-  const buffer = await sharp(absPath, { failOn: "none" })
-    .rotate()
-    .resize(config.maxDimension, config.maxDimension, {
+  let source: string | Buffer = absPath;
+  if (isRaw && path.extname(absPath).toLowerCase() === ".dng") {
+    const srcStat = await fs.stat(absPath);
+    const preview = await extractDngPreview(absPath, srcStat.mtimeMs);
+    if (preview) source = preview.buffer;
+  }
+
+  let pipeline = sharp(source, { failOn: "none" }).rotate();
+
+  if (config.maxDimension) {
+    pipeline = pipeline.resize(config.maxDimension, config.maxDimension, {
       fit: "inside",
       withoutEnlargement: true,
+    });
+  }
+
+  const buffer = await pipeline
+    .jpeg({
+      quality: config.quality,
+      mozjpeg: true,
+      chromaSubsampling: size === "thumb" ? "4:2:0" : "4:4:4",
     })
-    .jpeg({ quality: config.quality, mozjpeg: true })
     .toBuffer();
 
   await fs.writeFile(cachePath, buffer);
@@ -91,7 +117,7 @@ export async function getProcessedImage(
 }
 
 export async function cleanExpiredCache(): Promise<void> {
-  const dirs = [getThumbCacheDir(), getPreviewCacheDir()];
+  const dirs = [getThumbCacheDir(), getPreviewCacheDir(), getFullCacheDir()];
   const now = Date.now();
 
   for (const dir of dirs) {

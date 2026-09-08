@@ -18,7 +18,10 @@ export async function register() {
         const root = getRoot();
         if (root) {
           const cacheDir = path.join(root, ".gallery-cache");
-          fs.rmSync(cacheDir, { recursive: true, force: true });
+          // Wipe on-disk image caches but keep persisted metadata across restarts.
+          for (const sub of ["thumb", "preview", "full"]) {
+            fs.rmSync(path.join(cacheDir, sub), { recursive: true, force: true });
+          }
         }
       } catch {
         // best-effort

@@ -193,7 +193,7 @@ export default function ImageViewer({
         <img
           src={isFullLoaded ? fullSrc : (loadedSrc || previewSrc)}
           alt={currentImage.name}
-          className="max-w-full max-h-full object-contain transition-transform duration-100"
+          className="w-full h-full object-contain transition-transform duration-100"
           style={{
             transform: `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`,
             willChange: "transform",

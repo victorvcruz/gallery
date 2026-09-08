@@ -23,7 +23,26 @@ export function getPreviewCacheDir(): string {
   return path.join(getCacheDir(), "preview");
 }
 
+export function getFullCacheDir(): string {
+  return path.join(getCacheDir(), "full");
+}
+
+export function getMetadataCacheDir(): string {
+  return path.join(getCacheDir(), "metadata");
+}
+
 export const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
+
+export const RAW_EXTENSIONS = new Set([
+  ".arw",
+  ".cr2",
+  ".cr3",
+  ".nef",
+  ".dng",
+  ".raf",
+  ".orf",
+  ".rw2",
+]);
 
 export const IMAGE_EXTENSIONS = new Set([
   ".jpg",
@@ -35,18 +54,16 @@ export const IMAGE_EXTENSIONS = new Set([
   ".avif",
   ".heic",
   ".heif",
-  ".arw",
-  ".cr2",
-  ".cr3",
-  ".nef",
-  ".dng",
-  ".raf",
-  ".orf",
-  ".rw2",
+  ...RAW_EXTENSIONS,
 ]);
 
 export function isImageFile(filename: string): boolean {
   if (filename.startsWith(".")) return false;
   const ext = path.extname(filename).toLowerCase();
   return IMAGE_EXTENSIONS.has(ext);
+}
+
+export function isRawFile(filename: string): boolean {
+  const ext = path.extname(filename).toLowerCase();
+  return RAW_EXTENSIONS.has(ext);
 }

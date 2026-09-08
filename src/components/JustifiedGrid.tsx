@@ -47,11 +47,9 @@ export default function JustifiedGrid({ images, onImageClick }: JustifiedGridPro
 
     const aspectRatios = images.map((img) => img.width / img.height);
 
-    const targetRowHeight = containerWidth > 1200
-      ? 350
-      : containerWidth > 768
-        ? 280
-        : 200;
+    const targetRowHeight = Math.round(
+      Math.max(140, Math.min(260, containerWidth / 9))
+    );
 
     const result = justifiedLayout(aspectRatios, {
       containerWidth,
