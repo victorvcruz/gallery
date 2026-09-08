@@ -12,6 +12,11 @@ export function getGalleryRoot(): string {
 }
 
 export function getCacheDir(): string {
+  // Allow overriding via env so the photos volume can be mounted read-only
+  // (as recommended in the README) while the cache goes to a separate,
+  // writable location — required in Docker where /photos is typically :ro.
+  const override = process.env.GALLERY_CACHE_DIR;
+  if (override) return path.resolve(override);
   return path.join(getGalleryRoot(), ".gallery-cache");
 }
 

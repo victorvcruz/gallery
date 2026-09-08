@@ -7,17 +7,18 @@ export async function register() {
     const fs = await import("fs");
     const path = await import("path");
 
-    const getRoot = () => {
+    const resolveCacheDir = () => {
+      const override = process.env.GALLERY_CACHE_DIR;
+      if (override) return path.resolve(override);
       const root = process.env.GALLERY_ROOT;
       if (!root) return null;
-      return path.resolve(root);
+      return path.join(path.resolve(root), ".gallery-cache");
     };
 
     const shutdown = () => {
       try {
-        const root = getRoot();
-        if (root) {
-          const cacheDir = path.join(root, ".gallery-cache");
+        const cacheDir = resolveCacheDir();
+        if (cacheDir) {
           // Wipe on-disk image caches but keep persisted metadata across restarts.
           for (const sub of ["thumb", "preview", "full"]) {
             fs.rmSync(path.join(cacheDir, sub), { recursive: true, force: true });

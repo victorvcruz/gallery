@@ -27,6 +27,12 @@ COPY --from=builder /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 
+# Pre-create the default cache mount point with the runtime user's ownership
+# so a fresh named volume mounted at /cache inherits it (Docker seeds the
+# volume from the image on first use). Without this the process (running
+# as nextjs / uid 1001) can't mkdir under a root-owned volume.
+RUN mkdir -p /cache && chown -R nextjs:nodejs /cache
+
 USER nextjs
 
 EXPOSE 3000

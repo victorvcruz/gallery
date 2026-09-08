@@ -169,6 +169,7 @@ Thumbnails will be regenerated on next access.
 | Environment Variable | Required | Description |
 |---------------------|----------|-------------|
 | `GALLERY_ROOT` | Yes | Absolute path to your photos root directory |
+| `GALLERY_CACHE_DIR` | No | Override the on-disk cache location. Defaults to `<GALLERY_ROOT>/.gallery-cache`. Set this when the photos root is mounted read-only (e.g. Docker with `:ro`). |
 
 Set it in `.env.local` for persistent configuration:
 
@@ -202,11 +203,17 @@ docker build -t gallery .
 docker run -d \
   -p 3000:3000 \
   -v /path/to/your/photos:/photos:ro \
+  -v gallery-cache:/cache \
   -e GALLERY_ROOT=/photos \
+  -e GALLERY_CACHE_DIR=/cache \
   --name gallery \
   --restart unless-stopped \
   gallery
 ```
+
+The `/cache` volume is essential when `/photos` is mounted read-only —
+without it, thumbnail generation fails with `EROFS` because the app can't
+write to the photos tree.
 
 ### Without Docker
 
