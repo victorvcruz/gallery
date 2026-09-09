@@ -7,6 +7,7 @@ import {
   getThumbCacheDir,
   getPreviewCacheDir,
   getFullCacheDir,
+  getCacheMaxBytes,
   CACHE_TTL_MS,
   isRawFile,
 } from "./gallery-config";
@@ -38,6 +39,88 @@ function getCachePath(relativePath: string, size: ImageSize): string {
 
 async function ensureDir(dirPath: string): Promise<void> {
   await fs.mkdir(dirPath, { recursive: true });
+}
+
+// Fire-and-forget guard so many parallel writes don't each walk the whole
+// cache. When true, another eviction pass is already in flight.
+let evictionInFlight = false;
+// If a write happens while an eviction is running, we still want the next
+// pass to see the fresh files — remember and re-run at the end.
+let evictionQueued = false;
+
+async function enforceCacheSizeCap(): Promise<void> {
+  if (evictionInFlight) {
+    evictionQueued = true;
+    return;
+  }
+  evictionInFlight = true;
+  try {
+    const maxBytes = getCacheMaxBytes();
+    const dirs = [getThumbCacheDir(), getPreviewCacheDir(), getFullCacheDir()];
+
+    interface Entry {
+      path: string;
+      size: number;
+      mtime: number;
+    }
+    const entries: Entry[] = [];
+    let total = 0;
+
+    for (const dir of dirs) {
+      let files: string[];
+      try {
+        files = await fs.readdir(dir);
+      } catch {
+        continue;
+      }
+      for (const name of files) {
+        const p = path.join(dir, name);
+        try {
+          const st = await fs.stat(p);
+          if (!st.isFile()) continue;
+          entries.push({ path: p, size: st.size, mtime: st.mtimeMs });
+          total += st.size;
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (total <= maxBytes) return;
+
+    // Hysteresis: evict down to 90% so we don't run enforcement on every write
+    // once we're bumping right against the limit.
+    const target = Math.floor(maxBytes * 0.9);
+    entries.sort((a, b) => a.mtime - b.mtime);
+
+    for (const e of entries) {
+      if (total <= target) break;
+      try {
+        await fs.unlink(e.path);
+        total -= e.size;
+      } catch {
+        // another request may have deleted or replaced it — keep going
+      }
+    }
+  } finally {
+    evictionInFlight = false;
+    if (evictionQueued) {
+      evictionQueued = false;
+      // Re-run without awaiting so the caller isn't blocked.
+      enforceCacheSizeCap().catch(() => {});
+    }
+  }
+}
+
+async function touchAccess(filePath: string): Promise<void> {
+  // Bump mtime to "now" so LRU eviction treats this hit as recently used.
+  // Best-effort — a failure here doesn't affect the response.
+  const now = new Date();
+  try {
+    await fs.utimes(filePath, now, now);
+  } catch {
+    // ignore
+  }
 }
 
 export interface ProcessedImage {
@@ -76,6 +159,8 @@ export async function getProcessedImage(
 
     if (!cacheIsStale && cacheAge < CACHE_TTL_MS) {
       const buffer = await fs.readFile(cachePath);
+      // Mark as recently used so LRU keeps hot entries alive.
+      touchAccess(cachePath).catch(() => {});
       return { buffer, contentType: "image/jpeg" };
     }
 
@@ -125,6 +210,8 @@ export async function getProcessedImage(
     .toBuffer();
 
   await fs.writeFile(cachePath, buffer);
+  // Kick off async LRU enforcement — never blocks the response.
+  enforceCacheSizeCap().catch(() => {});
 
   return { buffer, contentType: "image/jpeg" };
 }
@@ -151,6 +238,11 @@ export async function cleanExpiredCache(): Promise<void> {
       // dir doesn't exist yet
     }
   }
+
+  // Then enforce the size cap so we cover the case where TTL wasn't the
+  // reason we're over the limit (e.g. one very active session that fills
+  // the cache within a single day).
+  await enforceCacheSizeCap();
 }
 
 export async function clearAllCache(): Promise<void> {

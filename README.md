@@ -170,6 +170,7 @@ Thumbnails will be regenerated on next access.
 |---------------------|----------|-------------|
 | `GALLERY_ROOT` | Yes | Absolute path to your photos root directory |
 | `GALLERY_CACHE_DIR` | No | Override the on-disk cache location. Defaults to `<GALLERY_ROOT>/.gallery-cache`. Set this when the photos root is mounted read-only (e.g. Docker with `:ro`). |
+| `GALLERY_CACHE_MAX_MB` | No | Maximum combined size (in megabytes) of the on-disk image caches (`thumb/`, `preview/`, `full/`). Defaults to `520`. When exceeded, least-recently-accessed entries are evicted down to ~90% of the cap. `metadata/` is not counted. |
 
 Set it in `.env.local` for persistent configuration:
 

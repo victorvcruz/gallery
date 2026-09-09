@@ -38,6 +38,21 @@ export function getMetadataCacheDir(): string {
 
 export const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 
+const DEFAULT_CACHE_MAX_MB = 520;
+
+/**
+ * Total size cap (bytes) for the image caches — thumb/preview/full only.
+ * Metadata is excluded: it's tiny (≈2KB/photo) and expensive to regenerate.
+ * When on-disk usage exceeds this, the oldest-by-mtime entries are evicted
+ * back down to ~90% of the cap.
+ */
+export function getCacheMaxBytes(): number {
+  const raw = process.env.GALLERY_CACHE_MAX_MB;
+  const mb = raw ? Number(raw) : DEFAULT_CACHE_MAX_MB;
+  if (!Number.isFinite(mb) || mb <= 0) return DEFAULT_CACHE_MAX_MB * 1024 * 1024;
+  return Math.floor(mb) * 1024 * 1024;
+}
+
 export const RAW_EXTENSIONS = new Set([
   ".arw",
   ".cr2",
