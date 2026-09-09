@@ -16,6 +16,8 @@ export interface ImageInfo {
   exif: ExifData;
   captureDate?: string;
   createdDate?: string;
+  /** Original file size in bytes. */
+  fileSize?: number;
 }
 
 export interface FolderInfo {

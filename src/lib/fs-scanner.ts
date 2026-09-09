@@ -9,25 +9,15 @@ import {
 } from "./gallery-config";
 import { parseExifBuffer, ExifData } from "./exif-reader";
 import { readDngExifFromFile } from "./dng-exif";
+import type {
+  FolderInfo,
+  ImageInfo,
+  SortDirection,
+  SortOrder,
+} from "./types";
 
-export interface ImageInfo {
-  name: string;
-  path: string;
-  width: number;
-  height: number;
-  exif: ExifData;
-  captureDate?: string;
-  createdDate?: string;
-}
-
-export interface FolderInfo {
-  name: string;
-  path: string;
-  bannerImage?: string;
-}
-
-export type SortOrder = "captureDate" | "createdDate" | "fileName";
-export type SortDirection = "asc" | "desc";
+// Re-export for callers that still import shared types from here.
+export type { FolderInfo, ImageInfo, SortDirection, SortOrder };
 
 interface CacheEntry {
   mtime: number;
@@ -35,8 +25,8 @@ interface CacheEntry {
 }
 
 // Bump when the shape of persisted ImageInfo changes so stale caches don't
-// hide missing fields (e.g. captureDate for DNGs added in v2).
-const META_VERSION = 2;
+// hide missing fields (v2: DNG captureDate, v3: fileSize).
+const META_VERSION = 3;
 const METADATA_CONCURRENCY = 8;
 const metadataCache = new Map<string, CacheEntry>();
 let metadataDirEnsured = false;
@@ -139,6 +129,7 @@ async function getImageInfo(
       exif,
       captureDate: exif.captureDate || undefined,
       createdDate: stat.birthtime.toISOString(),
+      fileSize: stat.size,
     };
 
     metadataCache.set(filePath, { mtime: stat.mtimeMs, data: info });
@@ -278,4 +269,65 @@ async function findBannerImage(
     // ignore errors (permission denied, broken symlinks, etc.)
   }
   return null;
+}
+
+/**
+ * Recursively walk from `relativePath` and return every image's metadata
+ * plus a folder count. Uses the same disk metadata cache as scanFolder, so
+ * a second call over the same tree is nearly free.
+ *
+ * Unlike scanFolder this deliberately skips the per-folder banner hunt —
+ * stats/analytics consumers only need the images themselves.
+ */
+export async function walkAllImages(
+  relativePath: string
+): Promise<{ images: ImageInfo[]; folderCount: number }> {
+  const root = getGalleryRoot();
+  const acc = { images: [] as ImageInfo[], folderCount: 0 };
+  await walkDirForImages(root, relativePath, acc);
+  return acc;
+}
+
+async function walkDirForImages(
+  root: string,
+  relativePath: string,
+  acc: { images: ImageInfo[]; folderCount: number }
+): Promise<void> {
+  const absPath = path.join(root, relativePath);
+  let entries: import("fs").Dirent[];
+  try {
+    entries = await fs.readdir(absPath, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  const imageJobs: { filePath: string; relPath: string }[] = [];
+  const subDirs: string[] = [];
+
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    if (entry.isDirectory()) {
+      subDirs.push(entry.name);
+    } else if (entry.isFile() && isImageFile(entry.name)) {
+      imageJobs.push({
+        filePath: path.join(absPath, entry.name),
+        relPath: path.join(relativePath, entry.name),
+      });
+    }
+  }
+
+  acc.folderCount += subDirs.length;
+
+  const infos = await mapWithConcurrency(
+    imageJobs,
+    METADATA_CONCURRENCY,
+    ({ filePath, relPath }) => getImageInfo(filePath, relPath)
+  );
+  for (const info of infos) {
+    if (info) acc.images.push(info);
+  }
+
+  for (const sub of subDirs) {
+    await walkDirForImages(root, path.join(relativePath, sub), acc);
+  }
 }

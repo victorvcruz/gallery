@@ -8,6 +8,7 @@ import SortControl from "./SortControl";
 import GroupControl from "./GroupControl";
 import ImageViewer from "./ImageViewer";
 import SelectionBar from "./SelectionBar";
+import StatsModal from "./StatsModal";
 import {
   FolderData,
   GroupBy,
@@ -34,6 +35,7 @@ export default function FolderView({ path }: FolderViewProps) {
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [statsOpen, setStatsOpen] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -150,6 +152,67 @@ export default function FolderView({ path }: FolderViewProps) {
 
         {data && (
           <>
+            {(data.folders.length > 0 || hasImages) && (
+              <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
+                <span className="text-xs text-[var(--text-muted)]">
+                  {[
+                    data.folders.length > 0
+                      ? `${data.folders.length} pasta${data.folders.length !== 1 ? "s" : ""}`
+                      : null,
+                    hasImages
+                      ? `${flatImages.length} foto${flatImages.length !== 1 ? "s" : ""}`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+                <div className="flex items-center gap-4 flex-wrap">
+                  <button
+                    onClick={() => setStatsOpen(true)}
+                    aria-label="Ver estatísticas"
+                    title="Estatísticas"
+                    className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer p-1"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M3 3v18h18M7 15l4-4 3 3 5-6"
+                      />
+                    </svg>
+                  </button>
+                  {hasImages && (
+                    <>
+                      <button
+                        onClick={
+                          selectionMode ? clearSelection : enterSelectionMode
+                        }
+                        className={`text-[11px] px-2 py-1 rounded transition-colors cursor-pointer ${
+                          selectionMode
+                            ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                            : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                        }`}
+                      >
+                        {selectionMode ? "Cancelar seleção" : "Selecionar"}
+                      </button>
+                      <GroupControl groupBy={groupBy} onChange={setGroupBy} />
+                      <SortControl
+                        sort={sort}
+                        direction={direction}
+                        onChange={handleSortChange}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
             {data.folders.length > 0 && (
               <section className="p-4 sm:p-6">
                 <AlbumGrid folders={data.folders} />
@@ -158,31 +221,6 @@ export default function FolderView({ path }: FolderViewProps) {
 
             {hasImages && (
               <section>
-                <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
-                  <span className="text-xs text-[var(--text-muted)]">
-                    {flatImages.length} foto{flatImages.length !== 1 ? "s" : ""}
-                  </span>
-                  <div className="flex items-center gap-4 flex-wrap">
-                    <button
-                      onClick={
-                        selectionMode ? clearSelection : enterSelectionMode
-                      }
-                      className={`text-[11px] px-2 py-1 rounded transition-colors cursor-pointer ${
-                        selectionMode
-                          ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                      }`}
-                    >
-                      {selectionMode ? "Cancelar seleção" : "Selecionar"}
-                    </button>
-                    <GroupControl groupBy={groupBy} onChange={setGroupBy} />
-                    <SortControl
-                      sort={sort}
-                      direction={direction}
-                      onChange={handleSortChange}
-                    />
-                  </div>
-                </div>
 
                 {groupBy === "none" ? (
                   <JustifiedGrid
@@ -247,6 +285,10 @@ export default function FolderView({ path }: FolderViewProps) {
             selectedPaths.size < flatImages.length ? selectAll : undefined
           }
         />
+      )}
+
+      {statsOpen && (
+        <StatsModal path={path} onClose={() => setStatsOpen(false)} />
       )}
     </div>
   );
