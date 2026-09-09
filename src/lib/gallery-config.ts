@@ -38,7 +38,7 @@ export function getMetadataCacheDir(): string {
 
 export const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 1 day
 
-const DEFAULT_CACHE_MAX_MB = 520;
+const DEFAULT_CACHE_MAX_MB = 1024;
 
 /**
  * Total size cap (bytes) for the image caches — thumb/preview/full only.

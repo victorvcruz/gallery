@@ -13,9 +13,9 @@ services:
     environment:
       - GALLERY_ROOT=/photos
       - GALLERY_CACHE_DIR=/cache
-      # Cap for thumb/preview/full on-disk cache (MB). Falls back to 520
+      # Cap for thumb/preview/full on-disk cache (MB). Falls back to 1024
       # in the app when unset.
-      - GALLERY_CACHE_MAX_MB=${GALLERY_CACHE_MAX_MB:-520}
+      - GALLERY_CACHE_MAX_MB=${GALLERY_CACHE_MAX_MB:-1024}
     restart: unless-stopped
 
 volumes:

@@ -21,7 +21,6 @@ export default function ImageViewer({
   onNavigate,
 }: ImageViewerProps) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
-  const [isFullLoaded, setIsFullLoaded] = useState(false);
   const currentImage = images[currentIndex];
 
   const {
@@ -87,7 +86,6 @@ export default function ImageViewer({
 
   useEffect(() => {
     setLoadedSrc(null);
-    setIsFullLoaded(false);
   }, [currentIndex]);
 
   useEffect(() => {
@@ -97,7 +95,9 @@ export default function ImageViewer({
     };
   }, []);
 
-  // Preload adjacent images
+  // Preload previews for ±5 neighbours so the arrow-key / swipe path is
+  // instant instead of stalling on sharp for each step. Browsers cap
+  // parallel requests per origin (~6), so the extra fetches queue naturally.
   useEffect(() => {
     const preload = (idx: number) => {
       if (idx >= 0 && idx < images.length) {
@@ -105,12 +105,13 @@ export default function ImageViewer({
         img.src = `/api/image/${images[idx].path}?size=preview`;
       }
     };
-    preload(currentIndex + 1);
-    preload(currentIndex - 1);
+    for (let d = 1; d <= 5; d++) {
+      preload(currentIndex + d);
+      preload(currentIndex - d);
+    }
   }, [currentIndex, images]);
 
   const previewSrc = `/api/image/${currentImage.path}?size=preview`;
-  const fullSrc = `/api/image/${currentImage.path}?size=full`;
 
   const handleBackdropClick = (e: React.MouseEvent) => {
     if (e.target === e.currentTarget && !isZoomed) {
@@ -202,7 +203,7 @@ export default function ImageViewer({
         onTouchEnd={handleTouchEnd}
       >
         <img
-          src={isFullLoaded ? fullSrc : (loadedSrc || previewSrc)}
+          src={loadedSrc || previewSrc}
           alt={currentImage.name}
           className="w-full h-full object-contain transition-transform duration-100"
           style={{
@@ -214,15 +215,6 @@ export default function ImageViewer({
           }}
           draggable={false}
         />
-        {/* Load full resolution on first zoom */}
-        {isZoomed && !isFullLoaded && (
-          <img
-            src={fullSrc}
-            className="hidden"
-            onLoad={() => setIsFullLoaded(true)}
-            alt=""
-          />
-        )}
       </div>
 
       {/* EXIF info bar */}
