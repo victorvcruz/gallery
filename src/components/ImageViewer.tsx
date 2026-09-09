@@ -111,6 +111,7 @@ export default function ImageViewer({
     }
   }, [currentIndex, images]);
 
+  const thumbSrc = `/api/image/${currentImage.path}?size=thumb`;
   const previewSrc = `/api/image/${currentImage.path}?size=preview`;
 
   const handleBackdropClick = (e: React.MouseEvent) => {
@@ -202,10 +203,27 @@ export default function ImageViewer({
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
       >
+        {/* Low-res thumb backdrop — served instantly from the browser cache
+            so there's no black screen while the ~1-2s preview is generated.
+            Swapped for the preview the moment it finishes loading. */}
+        {!loadedSrc && (
+          <img
+            src={thumbSrc}
+            aria-hidden
+            className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+            style={{
+              transform: `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`,
+              willChange: "transform",
+            }}
+            draggable={false}
+          />
+        )}
         <img
-          src={loadedSrc || previewSrc}
+          src={previewSrc}
           alt={currentImage.name}
-          className="w-full h-full object-contain transition-transform duration-100"
+          className={`absolute inset-0 w-full h-full object-contain ${
+            loadedSrc ? "opacity-100" : "opacity-0"
+          }`}
           style={{
             transform: `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`,
             willChange: "transform",
