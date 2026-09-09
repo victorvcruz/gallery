@@ -6,9 +6,11 @@ import {
   getGalleryRoot,
   getMetadataCacheDir,
   isImageFile,
+  isRawFile,
 } from "./gallery-config";
 import { parseExifBuffer, ExifData } from "./exif-reader";
-import { readDngExifFromFile } from "./dng-exif";
+import { readTiffExifFromFile } from "./tiff-exif";
+import { extractRawPreview } from "./raw-preview";
 import type {
   FolderInfo,
   ImageInfo,
@@ -25,8 +27,9 @@ interface CacheEntry {
 }
 
 // Bump when the shape of persisted ImageInfo changes so stale caches don't
-// hide missing fields (v2: DNG captureDate, v3: fileSize).
-const META_VERSION = 3;
+// hide missing fields (v2: DNG captureDate, v3: fileSize, v4: RAW extension
+// coverage — previously ARW/CR2/etc. silently dropped when sharp threw).
+const META_VERSION = 4;
 const METADATA_CONCURRENCY = 8;
 const metadataCache = new Map<string, CacheEntry>();
 let metadataDirEnsured = false;
@@ -95,32 +98,63 @@ async function getImageInfo(
       return disk;
     }
 
-    const metadata = await sharp(filePath).metadata();
-    if (!metadata.width || !metadata.height) return null;
+    // sharp may throw for RAW formats libvips can't decode (e.g. Sony ARW).
+    // Fall through to the embedded-preview fallback below when that happens.
+    let sharpWidth = 0;
+    let sharpHeight = 0;
+    let sharpOrientation = 1;
+    let sharpExifBuf: Buffer | undefined;
+    try {
+      const metadata = await sharp(filePath).metadata();
+      sharpWidth = metadata.width ?? 0;
+      sharpHeight = metadata.height ?? 0;
+      sharpOrientation = metadata.orientation ?? 1;
+      sharpExifBuf = metadata.exif;
+    } catch {
+      // libvips couldn't open this format — we'll try our own path below.
+    }
 
     let exif: ExifData = {};
-    if (metadata.exif) {
-      exif = parseExifBuffer(metadata.exif);
-    } else if (path.extname(filePath).toLowerCase() === ".dng") {
-      // libvips doesn't surface an EXIF buffer for DNGs — parse the TIFF
-      // IFDs ourselves so we get the real capture date, aperture, etc.
-      exif = await readDngExifFromFile(filePath);
+    if (sharpExifBuf) {
+      exif = parseExifBuffer(sharpExifBuf);
+    } else if (isRawFile(filePath)) {
+      // libvips doesn't surface an EXIF buffer for RAW containers — parse
+      // the TIFF IFDs ourselves so we get the real capture date, aperture,
+      // etc. Works for DNG, ARW, CR2, NEF, ORF, RW2.
+      exif = await readTiffExifFromFile(filePath);
     }
+
+    let width = sharpWidth;
+    let height = sharpHeight;
+    let orientation = sharpOrientation;
+
+    // If sharp couldn't read dimensions (unsupported RAW), extract the
+    // embedded JPEG preview just to learn the aspect ratio + orientation.
+    // The full preview extraction is cached in-memory, so a later thumb
+    // request reuses the same buffer.
+    if (!width || !height) {
+      const preview = await extractRawPreview(filePath, stat.mtimeMs);
+      if (preview) {
+        width = preview.width;
+        height = preview.height;
+        orientation = preview.orientation;
+      }
+    }
+
+    if (!width || !height) return null;
 
     // sharp.metadata() reports stored (pre-rotation) dimensions. If EXIF
     // orientation implies a 90°/270° rotation, the displayed aspect ratio is
     // transposed — swap so the justified grid lays out portrait shots correctly.
-    let width = metadata.width;
-    let height = metadata.height;
-    const orientation = metadata.orientation ?? 1;
     if (orientation >= 5 && orientation <= 8) {
       [width, height] = [height, width];
     }
 
-    // For DNGs sharp only surfaces the tiny embedded EXIF thumbnail (e.g. 256x171),
-    // but its aspect ratio matches the full sensor — that's all the justified grid
-    // needs. Keeping the numbers small avoids extracting the multi-MB preview
-    // during folder scans; getProcessedImage extracts it lazily on first render.
+    // For RAW files sharp/libvips (when it works at all) only surfaces the
+    // tiny embedded EXIF thumbnail (e.g. 256x171). Its aspect ratio matches
+    // the full sensor — that's all the justified grid needs. Keeping the
+    // numbers small avoids extracting the multi-MB preview during folder
+    // scans; getProcessedImage extracts it lazily on first render.
     const info: ImageInfo = {
       name: path.basename(filePath),
       path: relativePath,

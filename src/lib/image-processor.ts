@@ -11,7 +11,7 @@ import {
   CACHE_TTL_MS,
   isRawFile,
 } from "./gallery-config";
-import { extractDngPreview } from "./dng-preview";
+import { extractRawPreview } from "./raw-preview";
 
 sharp.cache({ memory: 512, files: 200, items: 500 });
 
@@ -173,26 +173,29 @@ export async function getProcessedImage(
   await ensureDir(config.cacheDir());
 
   let source: string | Buffer = absPath;
-  let dngRotation: number | null = null;
-  if (isRaw && path.extname(absPath).toLowerCase() === ".dng") {
+  let rawRotation: number | null = null;
+  if (isRaw) {
+    // libvips can't decode most RAW formats and even for DNG only surfaces
+    // the tiny EXIF thumbnail — extract the largest embedded preview
+    // ourselves. Works across DNG, ARW, CR2, NEF, ORF, RW2.
     const srcStat = await fs.stat(absPath);
-    const preview = await extractDngPreview(absPath, srcStat.mtimeMs);
+    const preview = await extractRawPreview(absPath, srcStat.mtimeMs);
     if (preview) {
       source = preview.buffer;
-      // The embedded preview JPEG usually lacks its own EXIF orientation, so
-      // sharp's .rotate() no-op won't apply the DNG's IFD0 orientation.
+      // Embedded preview JPEGs usually lack their own EXIF orientation, so
+      // sharp's .rotate() no-op won't apply the container's IFD0 orientation.
       // Translate EXIF orientation → CW rotation degrees.
       switch (preview.orientation) {
-        case 3: dngRotation = 180; break;
-        case 6: dngRotation = 90; break;
-        case 8: dngRotation = 270; break;
-        default: dngRotation = 0;
+        case 3: rawRotation = 180; break;
+        case 6: rawRotation = 90; break;
+        case 8: rawRotation = 270; break;
+        default: rawRotation = 0;
       }
     }
   }
 
   let pipeline = sharp(source, { failOn: "none" });
-  pipeline = dngRotation !== null ? pipeline.rotate(dngRotation) : pipeline.rotate();
+  pipeline = rawRotation !== null ? pipeline.rotate(rawRotation) : pipeline.rotate();
 
   if (config.maxDimension) {
     pipeline = pipeline.resize(config.maxDimension, config.maxDimension, {

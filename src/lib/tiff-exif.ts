@@ -2,9 +2,9 @@ import fs from "fs/promises";
 import { ExifData } from "./exif-reader";
 
 /*
- * Minimal TIFF/EXIF parser for DNGs. libvips exposes an EXIF buffer only for
- * JPEG-family inputs — for DNG (TIFF) it doesn't, so we walk IFD0 and the
- * EXIF SubIFD ourselves.
+ * Minimal TIFF/EXIF parser. libvips exposes an EXIF buffer only for
+ * JPEG-family inputs — for TIFF-based containers (DNG, ARW, CR2, NEF,
+ * ORF, RW2) it doesn't, so we walk IFD0 and the EXIF SubIFD ourselves.
  *
  * Only the tags the app consumes (date, aperture, shutter, ISO, focal,
  * camera, lens) are extracted.
@@ -95,7 +95,7 @@ function parseExifDate(s: string): string | undefined {
   return isNaN(dateObj.getTime()) ? undefined : dateObj.toISOString();
 }
 
-export function readDngExif(buf: Buffer): ExifData {
+export function readTiffExif(buf: Buffer): ExifData {
   const result: ExifData = {};
   try {
     if (buf.length < 8) return result;
@@ -164,10 +164,10 @@ export function readDngExif(buf: Buffer): ExifData {
 
 /**
  * Read just the first `bytes` of a file so we can parse the TIFF header +
- * IFDs without loading a 30MB+ DNG for every folder scan. Sony/Lightroom
- * DNGs keep IFD0 and the EXIF SubIFD well under 1MB into the file.
+ * IFDs without loading a 30MB+ RAW for every folder scan. Sony ARWs and
+ * Lightroom DNGs keep IFD0 and the EXIF SubIFD well under 1MB into the file.
  */
-export async function readDngExifFromFile(
+export async function readTiffExifFromFile(
   filePath: string,
   bytes = 1024 * 1024
 ): Promise<ExifData> {
@@ -176,7 +176,7 @@ export async function readDngExifFromFile(
     handle = await fs.open(filePath, "r");
     const buf = Buffer.allocUnsafe(bytes);
     const { bytesRead } = await handle.read(buf, 0, bytes, 0);
-    return readDngExif(buf.subarray(0, bytesRead));
+    return readTiffExif(buf.subarray(0, bytesRead));
   } catch {
     return {};
   } finally {

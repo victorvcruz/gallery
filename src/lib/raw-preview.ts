@@ -1,19 +1,20 @@
 import fs from "fs/promises";
 import sharp from "sharp";
 
-export interface DngPreview {
+export interface RawPreview {
   buffer: Buffer;
   width: number;
   height: number;
-  /** EXIF orientation from the DNG's IFD0 (1-8). The extracted preview
+  /** EXIF orientation from the file's IFD0 (1-8). The extracted preview
    *  buffer itself usually doesn't carry orientation EXIF, so callers must
-   *  apply this rotation explicitly. */
+   *  apply this rotation explicitly. Only meaningful for TIFF-based RAWs
+   *  (DNG, ARW, CR2, NEF, ORF, RW2); for other containers this is 1. */
   orientation: number;
 }
 
 interface CacheEntry {
   mtime: number;
-  preview: DngPreview | null;
+  preview: RawPreview | null;
 }
 
 const MAX_CACHE_ENTRIES = 24;
@@ -22,12 +23,16 @@ const cache = new Map<string, CacheEntry>();
 const SOI_PREFIX = Buffer.from([0xff, 0xd8, 0xff]);
 const EOI = Buffer.from([0xff, 0xd9]);
 
-/** Read the Orientation tag (0x0112) from a DNG/TIFF's IFD0 without decoding
- *  the whole file. Returns 1 (normal) on parse failure. */
+/** Read the Orientation tag (0x0112) from IFD0 of a TIFF-based file
+ *  (DNG, ARW, CR2, NEF, ORF, RW2). Returns 1 (normal) on parse failure or
+ *  when the file isn't a TIFF at all. */
 function readTiffOrientation(buf: Buffer): number {
   try {
+    if (buf.length < 8) return 1;
     const byteOrder = buf.readUInt16LE(0);
     const le = byteOrder === 0x4949;
+    // Reject non-TIFF containers (CR3 uses ISOBMFF, RAF is proprietary).
+    if (byteOrder !== 0x4949 && byteOrder !== 0x4d4d) return 1;
     const r16 = (o: number) => (le ? buf.readUInt16LE(o) : buf.readUInt16BE(o));
     const r32 = (o: number) => (le ? buf.readUInt32LE(o) : buf.readUInt32BE(o));
     if (r16(2) !== 0x2a) return 1;
@@ -65,15 +70,22 @@ function findEmbeddedJpegChunks(buf: Buffer): { offset: number; size: number }[]
 }
 
 /**
- * Extract the largest embedded JPEG preview from a DNG file.
- * DNGs store multiple JPEG-encoded regions: tiny EXIF thumbs, medium/full previews,
- * and (lossless) raw sensor tiles. We skip lossless-JPEG markers and pick the
- * candidate that decodes to the largest pixel count.
+ * Extract the largest embedded JPEG preview from a RAW file.
+ *
+ * RAW containers store multiple JPEG-encoded regions: tiny EXIF thumbs,
+ * medium/full-size previews, and (lossless) raw sensor tiles. We skip
+ * lossless-JPEG markers (SOF3/SOF7) and pick the candidate that decodes
+ * to the largest pixel count.
+ *
+ * Works for any RAW that embeds a standard JPEG preview — verified with
+ * DNG (Lightroom), ARW (Sony), CR2 (Canon), NEF (Nikon), ORF (Olympus),
+ * RW2 (Panasonic). Non-TIFF containers (CR3, RAF) may also work if their
+ * embedded preview happens to be a standard JPEG.
  */
-export async function extractDngPreview(
+export async function extractRawPreview(
   filePath: string,
   mtime: number
-): Promise<DngPreview | null> {
+): Promise<RawPreview | null> {
   const cached = cache.get(filePath);
   if (cached && cached.mtime === mtime) return cached.preview;
 
@@ -81,7 +93,7 @@ export async function extractDngPreview(
   const orientation = readTiffOrientation(buf);
   const candidates = findEmbeddedJpegChunks(buf);
 
-  let best: DngPreview | null = null;
+  let best: RawPreview | null = null;
   // Try up to 20 largest byte-size candidates to cap work.
   const sorted = [...candidates].sort((a, b) => b.size - a.size).slice(0, 20);
   for (const c of sorted) {
