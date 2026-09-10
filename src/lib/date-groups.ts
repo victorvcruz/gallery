@@ -43,17 +43,18 @@ function keyAndLabel(d: Date, groupBy: Exclude<GroupBy, "none">): {
 const UNDATED_KEY = "__undated__";
 
 export function groupImages(
-  images: ImageInfo[],
+  images: ImageInfo[] | undefined | null,
   groupBy: GroupBy,
   direction: SortDirection
 ): ImageGroup[] {
-  if (groupBy === "none" || images.length === 0) {
-    return [{ key: "all", label: "", images }];
+  const list = Array.isArray(images) ? images : [];
+  if (groupBy === "none" || list.length === 0) {
+    return [{ key: "all", label: "", images: list }];
   }
 
   const buckets = new Map<string, ImageGroup>();
 
-  for (const img of images) {
+  for (const img of list) {
     const dateStr = img.captureDate || img.createdDate;
     let bucketKey = UNDATED_KEY;
     let bucketLabel = "Sem data";

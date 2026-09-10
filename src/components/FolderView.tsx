@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Header from "./Header";
 import AlbumGrid from "./AlbumGrid";
 import JustifiedGrid from "./JustifiedGrid";
@@ -24,18 +24,45 @@ import {
 
 interface FolderViewProps {
   path: string;
+  /** When present, open the viewer on this image once the folder data
+   *  has loaded. Comes from the URL (/folder/image.ext deep links). */
+  initialImage?: string;
 }
 
-export default function FolderView({ path }: FolderViewProps) {
+function folderUrl(path: string): string {
+  return path ? `/${path}` : "/";
+}
+
+function imageUrl(path: string, imageName: string): string {
+  const encoded = encodeURIComponent(imageName);
+  return path ? `/${path}/${encoded}` : `/${encoded}`;
+}
+
+// Client-side check for image extension. Kept in sync with server-side
+// isImageFile — only used for parsing the current URL after popstate.
+const IMAGE_EXT_RE = /\.(jpe?g|png|dng|arw|cr2|cr3|nef|raf|orf|rw2|tiff?|webp|avif|heif?)$/i;
+
+function extractImageFromUrl(pathname: string): string | null {
+  const parts = pathname.split("/").filter(Boolean).map(decodeURIComponent);
+  const last = parts[parts.length - 1] ?? "";
+  return IMAGE_EXT_RE.test(last) ? last : null;
+}
+
+export default function FolderView({ path, initialImage }: FolderViewProps) {
   const [data, setData] = useState<FolderData | null>(null);
   const [loading, setLoading] = useState(true);
   const [sort, setSort] = useState<SortOrder>("captureDate");
   const [direction, setDirection] = useState<SortDirection>("asc");
   const [groupBy, setGroupBy] = useState<GroupBy>("none");
-  const [viewerIndex, setViewerIndex] = useState<number | null>(null);
+  const [viewerName, setViewerName] = useState<string | null>(null);
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [statsOpen, setStatsOpen] = useState(false);
+  // Track whether the currently-open viewer was opened via pushState (a
+  // click), so closing can `back()` and pop the entry cleanly. If we got
+  // here via deep-link (server render) instead, there's no entry to pop.
+  const openedViaPushRef = useRef(false);
+  const initialImageAppliedRef = useRef(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -44,10 +71,17 @@ export default function FolderView({ path }: FolderViewProps) {
         ? `/api/folders/${path}?sort=${sort}&dir=${direction}`
         : `/api/folders?sort=${sort}&dir=${direction}`;
       const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
+      // Guard against error-shaped responses that would set data.folders =
+      // undefined and blow up the render.
+      if (!json || !Array.isArray(json.folders) || !Array.isArray(json.images)) {
+        throw new Error("Malformed folder response");
+      }
       setData(json);
     } catch (err) {
       console.error("Failed to fetch folder data:", err);
+      setData({ folders: [], images: [] });
     } finally {
       setLoading(false);
     }
@@ -63,15 +97,35 @@ export default function FolderView({ path }: FolderViewProps) {
   };
 
   const handleImageClick = (index: number) => {
-    setViewerIndex(index);
+    const img = flatImages[index];
+    if (!img) return;
+    setViewerName(img.name);
+    // window.history bypasses Next's router entirely — no RSC re-fetch,
+    // no re-render flash. The URL is still deep-linkable because
+    // page.tsx parses it on real page loads / refreshes.
+    window.history.pushState(null, "", imageUrl(path, img.name));
+    openedViaPushRef.current = true;
   };
 
   const handleViewerClose = () => {
-    setViewerIndex(null);
+    setViewerName(null);
+    if (openedViaPushRef.current) {
+      openedViaPushRef.current = false;
+      // Pops the pushState entry we added on open. popstate handler runs
+      // but its state update is a no-op since we already cleared it.
+      window.history.back();
+    } else {
+      // Deep-link entry — strip the image segment without adding history.
+      window.history.replaceState(null, "", folderUrl(path));
+    }
   };
 
   const handleViewerNavigate = (index: number) => {
-    setViewerIndex(index);
+    const img = flatImages[index];
+    if (!img) return;
+    setViewerName(img.name);
+    // replace so arrow-key spam doesn't grow the history stack.
+    window.history.replaceState(null, "", imageUrl(path, img.name));
   };
 
   const groups = useMemo(
@@ -93,6 +147,37 @@ export default function FolderView({ path }: FolderViewProps) {
     }
     return offsets;
   }, [groups]);
+
+  // On first data load only, apply the deep-linked initialImage to the
+  // viewer. After that, viewerName is driven purely by user actions and
+  // popstate — we never re-derive from props (which would misfire on every
+  // sort/group change even though the URL / image hasn't changed).
+  useEffect(() => {
+    if (initialImageAppliedRef.current) return;
+    if (!data) return;
+    initialImageAppliedRef.current = true;
+    if (initialImage) setViewerName(initialImage);
+  }, [data, initialImage]);
+
+  // Browser back/forward: sync viewer to whatever the URL now points at.
+  useEffect(() => {
+    const onPop = () => {
+      const name = extractImageFromUrl(window.location.pathname);
+      setViewerName(name);
+      // History entry we may have pushed has been popped by this navigation.
+      openedViaPushRef.current = false;
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // Derive current viewer index from the name each render — automatically
+  // stays correct when sort/group reorders flatImages.
+  const viewerIndex = useMemo(() => {
+    if (!viewerName) return null;
+    const idx = flatImages.findIndex((img) => img.name === viewerName);
+    return idx >= 0 ? idx : null;
+  }, [viewerName, flatImages]);
 
   const toggleSelect = useCallback((p: string) => {
     setSelectedPaths((prev) => {
