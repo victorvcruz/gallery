@@ -11,6 +11,7 @@ interface JustifiedGridProps {
   selectionMode?: boolean;
   selectedPaths?: Set<string>;
   onToggleSelect?: (path: string) => void;
+  starredPaths?: Set<string>;
 }
 
 interface LayoutBox {
@@ -31,6 +32,7 @@ export default function JustifiedGrid({
   selectionMode = false,
   selectedPaths,
   onToggleSelect,
+  starredPaths,
 }: JustifiedGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -77,6 +79,7 @@ export default function JustifiedGrid({
           {layout.boxes.map((box, index) => {
             const img = images[index];
             const selected = selectedPaths?.has(img.path) ?? false;
+            const starred = starredPaths?.has(img.path) ?? false;
             const handleTileClick = () => {
               if (selectionMode) {
                 onToggleSelect?.(img.path);
@@ -104,6 +107,17 @@ export default function JustifiedGrid({
                 />
                 {selected && (
                   <div className="absolute inset-0 ring-4 ring-inset ring-blue-500 bg-blue-500/20 pointer-events-none" />
+                )}
+                {starred && (
+                  <div className="absolute top-2 right-2 pointer-events-none drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+                    <svg
+                      className="w-5 h-5 text-yellow-400"
+                      fill="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                    </svg>
+                  </div>
                 )}
                 {(selectionMode || selected) && (
                   <button

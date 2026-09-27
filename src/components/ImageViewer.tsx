@@ -12,6 +12,8 @@ interface ImageViewerProps {
   currentIndex: number;
   onClose: () => void;
   onNavigate: (index: number) => void;
+  isStarred?: boolean;
+  onToggleStar?: () => void;
 }
 
 export default function ImageViewer({
@@ -19,6 +21,8 @@ export default function ImageViewer({
   currentIndex,
   onClose,
   onNavigate,
+  isStarred = false,
+  onToggleStar,
 }: ImageViewerProps) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
   const currentImage = images[currentIndex];
@@ -60,6 +64,21 @@ export default function ImageViewer({
     onClose: handleClose,
     enabled: true,
   });
+
+  useEffect(() => {
+    if (!onToggleStar) return;
+    const handler = (e: KeyboardEvent) => {
+      // Ignore when the user is typing somewhere else on the page.
+      const target = e.target as HTMLElement | null;
+      if (target && ["INPUT", "TEXTAREA"].includes(target.tagName)) return;
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        onToggleStar();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onToggleStar]);
 
   // Touch/swipe support
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
@@ -170,6 +189,32 @@ export default function ImageViewer({
 
       {/* Top-right actions */}
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+        {onToggleStar && (
+          <button
+            onClick={onToggleStar}
+            aria-label={isStarred ? "Remover pick" : "Marcar como pick"}
+            title={isStarred ? "Remover pick (S)" : "Marcar como pick (S)"}
+            className={`transition-colors cursor-pointer p-1 ${
+              isStarred
+                ? "text-yellow-400 hover:text-yellow-300"
+                : "text-white/60 hover:text-white"
+            }`}
+          >
+            <svg
+              className="w-6 h-6"
+              fill={isStarred ? "currentColor" : "none"}
+              stroke="currentColor"
+              strokeWidth={2}
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"
+              />
+            </svg>
+          </button>
+        )}
         <DownloadMenu
           hint={currentImage.name}
           onDownload={(format: DownloadFormat) =>

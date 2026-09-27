@@ -9,6 +9,8 @@ import GroupControl from "./GroupControl";
 import ImageViewer from "./ImageViewer";
 import SelectionBar from "./SelectionBar";
 import StatsModal from "./StatsModal";
+import PickFilter, { type PickFilter as PickFilterValue } from "./PickFilter";
+import CullingMode from "./CullingMode";
 import {
   FolderData,
   GroupBy,
@@ -58,6 +60,12 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
   const [statsOpen, setStatsOpen] = useState(false);
+  const [starred, setStarred] = useState<Set<string>>(new Set());
+  // Path → last starred-at timestamp (ms). Used by CullingMode to resume
+  // from the photo immediately after the last starred one.
+  const [starredAt, setStarredAt] = useState<Record<string, number>>({});
+  const [pickFilter, setPickFilter] = useState<PickFilterValue>("all");
+  const [cullingOpen, setCullingOpen] = useState(false);
   // Track whether the currently-open viewer was opened via pushState (a
   // click), so closing can `back()` and pop the entry cleanly. If we got
   // here via deep-link (server render) instead, there's no entry to pop.
@@ -90,6 +98,81 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Picks are a global list stored in the cache dir. Fetch once per mount;
+  // toggles do an optimistic update + fire-and-forget POST.
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/picks")
+      .then((r) => (r.ok ? r.json() : { paths: [], starredAt: {} }))
+      .then((json) => {
+        if (cancelled) return;
+        if (Array.isArray(json?.paths)) setStarred(new Set(json.paths));
+        if (json?.starredAt && typeof json.starredAt === "object") {
+          setStarredAt({ ...json.starredAt });
+        }
+      })
+      .catch(() => { /* leave empty */ });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleStar = useCallback((imagePath: string) => {
+    let willBeStarred = false;
+    setStarred((prev) => {
+      const next = new Set(prev);
+      if (next.has(imagePath)) {
+        next.delete(imagePath);
+        willBeStarred = false;
+      } else {
+        next.add(imagePath);
+        willBeStarred = true;
+      }
+      return next;
+    });
+    const ts = Date.now();
+    setStarredAt((prev) => {
+      const next = { ...prev };
+      if (willBeStarred) next[imagePath] = ts;
+      else delete next[imagePath];
+      return next;
+    });
+    fetch("/api/picks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: imagePath, starred: willBeStarred }),
+    }).catch((err) => console.error("Failed to persist pick:", err));
+  }, []);
+
+  const bulkSetStars = useCallback(
+    (imagePaths: string[], targetStarred: boolean) => {
+      if (imagePaths.length === 0) return;
+      const ts = Date.now();
+      setStarred((prev) => {
+        const next = new Set(prev);
+        for (const p of imagePaths) {
+          if (targetStarred) next.add(p);
+          else next.delete(p);
+        }
+        return next;
+      });
+      setStarredAt((prev) => {
+        const next = { ...prev };
+        for (const p of imagePaths) {
+          if (targetStarred) next[p] = ts;
+          else delete next[p];
+        }
+        return next;
+      });
+      fetch("/api/picks/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paths: imagePaths, starred: targetStarred }),
+      }).catch((err) => console.error("Failed to persist bulk picks:", err));
+    },
+    []
+  );
 
   const handleSortChange = (newSort: SortOrder, newDirection: SortDirection) => {
     setSort(newSort);
@@ -128,9 +211,16 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
     window.history.replaceState(null, "", imageUrl(path, img.name));
   };
 
+  const visibleImages = useMemo(() => {
+    if (!data) return [];
+    if (pickFilter === "all") return data.images;
+    if (pickFilter === "picks") return data.images.filter((i) => starred.has(i.path));
+    return data.images.filter((i) => !starred.has(i.path));
+  }, [data, starred, pickFilter]);
+
   const groups = useMemo(
-    () => (data ? groupImages(data.images, groupBy, direction) : []),
-    [data, groupBy, direction]
+    () => (data ? groupImages(visibleImages, groupBy, direction) : []),
+    [data, visibleImages, groupBy, direction]
   );
 
   const flatImages = useMemo(
@@ -286,6 +376,29 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                       >
                         {selectionMode ? "Cancelar seleção" : "Selecionar"}
                       </button>
+                      <button
+                        onClick={() => setCullingOpen(true)}
+                        title="Modo culling (Tinder-like)"
+                        aria-label="Modo culling"
+                        className="text-[11px] px-2 py-1 rounded transition-colors cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+                      >
+                        Cull
+                      </button>
+                      <PickFilter
+                        value={pickFilter}
+                        onChange={setPickFilter}
+                        pickCount={starred.size}
+                      />
+                      {starred.size > 0 && (
+                        <a
+                          href="/api/picks/export"
+                          download
+                          title="Baixar CSV dos picks"
+                          className="text-[11px] px-2 py-1 rounded transition-colors cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)] no-underline"
+                        >
+                          Export CSV
+                        </a>
+                      )}
                       <GroupControl groupBy={groupBy} onChange={setGroupBy} />
                       <SortControl
                         sort={sort}
@@ -314,6 +427,7 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                     selectionMode={selectionMode}
                     selectedPaths={selectedPaths}
                     onToggleSelect={toggleSelect}
+                    starredPaths={starred}
                   />
                 ) : (
                   groups.map((group, gi) => (
@@ -358,13 +472,23 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
           currentIndex={viewerIndex}
           onClose={handleViewerClose}
           onNavigate={handleViewerNavigate}
+          isStarred={starred.has(flatImages[viewerIndex]?.path ?? "")}
+          onToggleStar={() => {
+            const p = flatImages[viewerIndex]?.path;
+            if (p) toggleStar(p);
+          }}
         />
       )}
 
       {selectedPaths.size > 0 && (
         <SelectionBar
           count={selectedPaths.size}
+          starredInSelection={
+            [...selectedPaths].filter((p) => starred.has(p)).length
+          }
           onDownload={handleZipDownload}
+          onStarAll={() => bulkSetStars([...selectedPaths], true)}
+          onUnstarAll={() => bulkSetStars([...selectedPaths], false)}
           onClear={clearSelection}
           onSelectAll={
             selectedPaths.size < flatImages.length ? selectAll : undefined
@@ -374,6 +498,16 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
 
       {statsOpen && (
         <StatsModal path={path} onClose={() => setStatsOpen(false)} />
+      )}
+
+      {cullingOpen && hasImages && (
+        <CullingMode
+          images={flatImages}
+          startIndex={viewerIndex}
+          starredPaths={starred}
+          onToggleStar={toggleStar}
+          onClose={() => setCullingOpen(false)}
+        />
       )}
     </div>
   );
