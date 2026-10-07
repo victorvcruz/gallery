@@ -111,9 +111,12 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
     (data as (FolderData & { pendingCount?: number }) | null)?.pendingCount ?? 0;
   useEffect(() => {
     if (pendingCount <= 0) return;
+    // Short interval so aspect-ratio reflow feels close to real-time as
+    // the worker drains. The response is cheap (readdir + in-memory
+    // cache lookups once the eager head is done).
     const id = setInterval(() => {
       fetchData({ silent: true });
-    }, 2000);
+    }, 1000);
     return () => clearInterval(id);
   }, [pendingCount, fetchData]);
 

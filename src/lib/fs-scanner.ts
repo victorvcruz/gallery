@@ -328,6 +328,16 @@ export interface ScanOptions {
   lite?: boolean;
 }
 
+/**
+ * On a lite scan, how many of the directory's first files we process
+ * synchronously (full sharp + EXIF) before falling back to placeholders.
+ * This covers roughly the first screenful + preload margin of a cold
+ * grid open, so photos the user sees immediately already have real
+ * aspect ratios — the placeholder reflow only ever happens for shots
+ * further down that the user has to scroll to.
+ */
+const LITE_EAGER_HEAD = 24;
+
 export interface ScanFolderResult {
   folders: FolderInfo[];
   images: ImageInfo[];
@@ -343,7 +353,6 @@ export async function scanFolder(
 ): Promise<ScanFolderResult> {
   const root = getGalleryRoot();
   const absPath = path.join(root, relativePath);
-  const infoFn = opts.lite ? getImageInfoFast : getImageInfo;
 
   const entries = await fs.readdir(absPath, { withFileTypes: true });
 
@@ -376,9 +385,30 @@ export async function scanFolder(
         bannerImage: banner || undefined,
       } as FolderInfo;
     }),
-    mapWithConcurrency(imageFiles, METADATA_CONCURRENCY, ({ filePath, relPath }) =>
-      infoFn(filePath, relPath)
-    ),
+    (async () => {
+      if (!opts.lite) {
+        // Full mode: everything resolves inline, same as before.
+        return mapWithConcurrency(
+          imageFiles,
+          METADATA_CONCURRENCY,
+          ({ filePath, relPath }) => getImageInfo(filePath, relPath)
+        );
+      }
+      // Lite mode: resolve the first N files for real so the top of the
+      // grid never shows placeholder aspect ratios. Everything after N
+      // falls back to the fast path (placeholder + enqueue).
+      const head = imageFiles.slice(0, LITE_EAGER_HEAD);
+      const tail = imageFiles.slice(LITE_EAGER_HEAD);
+      const [eager, lazy] = await Promise.all([
+        mapWithConcurrency(head, METADATA_CONCURRENCY, ({ filePath, relPath }) =>
+          getImageInfo(filePath, relPath)
+        ),
+        mapWithConcurrency(tail, METADATA_CONCURRENCY, ({ filePath, relPath }) =>
+          getImageInfoFast(filePath, relPath)
+        ),
+      ]);
+      return [...eager, ...lazy];
+    })(),
   ]);
 
   const images = imageResults.filter((img): img is ImageInfo => img !== null);
@@ -470,6 +500,9 @@ export async function walkAllImages(
 ): Promise<WalkResult> {
   const root = getGalleryRoot();
   const acc: WalkResult = { images: [], folderCount: 0, pendingCount: 0 };
+  // walk uses only the fast or only the slow path — the eager-head
+  // optimisation in scanFolder is for the folder-list route where the
+  // user is staring at a grid. Stats blocks on everything anyway.
   const infoFn = opts.lite ? getImageInfoFast : getImageInfo;
   await walkDirForImages(root, relativePath, acc, infoFn);
   return acc;
