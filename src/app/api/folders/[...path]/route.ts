@@ -14,7 +14,8 @@ export async function GET(
     const sort = (searchParams.get("sort") || "captureDate") as SortOrder;
     const direction = (searchParams.get("dir") || "asc") as SortDirection;
 
-    const result = await scanFolder(relativePath, sort, direction);
+    const lite = searchParams.get("full") !== "1";
+    const result = await scanFolder(relativePath, sort, direction, { lite });
     return NextResponse.json(result, {
       headers: { "Cache-Control": "no-store" },
     });

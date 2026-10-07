@@ -72,32 +72,50 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
   const openedViaPushRef = useRef(false);
   const initialImageAppliedRef = useRef(false);
 
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const url = path
-        ? `/api/folders/${path}?sort=${sort}&dir=${direction}`
-        : `/api/folders?sort=${sort}&dir=${direction}`;
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      // Guard against error-shaped responses that would set data.folders =
-      // undefined and blow up the render.
-      if (!json || !Array.isArray(json.folders) || !Array.isArray(json.images)) {
-        throw new Error("Malformed folder response");
+  const fetchData = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      if (!silent) setLoading(true);
+      try {
+        const url = path
+          ? `/api/folders/${path}?sort=${sort}&dir=${direction}`
+          : `/api/folders?sort=${sort}&dir=${direction}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json();
+        if (!json || !Array.isArray(json.folders) || !Array.isArray(json.images)) {
+          throw new Error("Malformed folder response");
+        }
+        setData(json);
+        return json as FolderData & { pendingCount?: number };
+      } catch (err) {
+        console.error("Failed to fetch folder data:", err);
+        if (!silent) setData({ folders: [], images: [] });
+        return null;
+      } finally {
+        if (!silent) setLoading(false);
       }
-      setData(json);
-    } catch (err) {
-      console.error("Failed to fetch folder data:", err);
-      setData({ folders: [], images: [] });
-    } finally {
-      setLoading(false);
-    }
-  }, [path, sort, direction]);
+    },
+    [path, sort, direction]
+  );
 
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // While the server reported pending metadata jobs for this folder, poll
+  // every few seconds and silently merge the fresher response. The grid
+  // will reflow aspect ratios for portrait shots as their real dims land,
+  // and EXIF-dependent features (date grouping, stats) light up without
+  // blocking the initial render.
+  const pendingCount =
+    (data as (FolderData & { pendingCount?: number }) | null)?.pendingCount ?? 0;
+  useEffect(() => {
+    if (pendingCount <= 0) return;
+    const id = setInterval(() => {
+      fetchData({ silent: true });
+    }, 2000);
+    return () => clearInterval(id);
+  }, [pendingCount, fetchData]);
 
   // Picks are a global list stored in the cache dir. Fetch once per mount;
   // toggles do an optimistic update + fire-and-forget POST.
@@ -329,7 +347,7 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
           <>
             {(data.folders.length > 0 || hasImages) && (
               <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
-                <span className="text-xs text-[var(--text-muted)]">
+                <span className="text-xs text-[var(--text-muted)] flex items-center gap-2">
                   {[
                     data.folders.length > 0
                       ? `${data.folders.length} pasta${data.folders.length !== 1 ? "s" : ""}`
@@ -340,6 +358,15 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                   ]
                     .filter(Boolean)
                     .join(" · ")}
+                  {pendingCount > 0 && (
+                    <span
+                      className="inline-flex items-center gap-1 text-[10px] text-blue-300/80"
+                      title={`${pendingCount} fotos sendo analisadas em background`}
+                    >
+                      <span className="w-2 h-2 rounded-full border border-blue-300/80 border-t-transparent animate-spin" />
+                      {pendingCount} analisando
+                    </span>
+                  )}
                 </span>
                 <div className="flex items-center gap-4 flex-wrap">
                   <button

@@ -203,7 +203,35 @@ export function aggregate(images: ImageInfo[], folderCount: number): StatsResult
   };
 }
 
-export async function computeStats(relativePath: string): Promise<StatsResult> {
-  const { images, folderCount } = await walkAllImages(relativePath);
-  return aggregate(images, folderCount);
+export type StatsResponse =
+  | { status: "ready"; result: StatsResult }
+  | {
+      status: "pending";
+      /** Total images discovered in the scope so far. */
+      totalInScope: number;
+      /** Images in this scope whose metadata hasn't been computed yet. */
+      pendingInScope: number;
+    };
+
+/**
+ * Compute stats for a folder tree. Uses the lite scan path, which does
+ * NOT block on sharp/exif for cache-miss photos — they get queued for
+ * background processing instead. If any photos in the scope are still
+ * pending, returns `{ status: "pending", … }` with the counts so the
+ * client can show a progress bar and poll; once pending reaches zero
+ * the aggregation is accurate and we return `{ status: "ready", … }`.
+ */
+export async function computeStats(relativePath: string): Promise<StatsResponse> {
+  const { images, folderCount, pendingCount } = await walkAllImages(
+    relativePath,
+    { lite: true }
+  );
+  if (pendingCount > 0) {
+    return {
+      status: "pending",
+      totalInScope: images.length,
+      pendingInScope: pendingCount,
+    };
+  }
+  return { status: "ready", result: aggregate(images, folderCount) };
 }

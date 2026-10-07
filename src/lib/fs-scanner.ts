@@ -34,6 +34,93 @@ const METADATA_CONCURRENCY = 8;
 const metadataCache = new Map<string, CacheEntry>();
 let metadataDirEnsured = false;
 
+/**
+ * Placeholder dimensions used when a photo's real metadata hasn't been
+ * computed yet. 3:2 is the dominant aspect ratio for the DNG/ARW library
+ * this app targets, so the justified grid lays out reasonably on first
+ * render and only reflows for the actual portrait shots once their real
+ * dims come in from the background worker.
+ */
+const PLACEHOLDER_WIDTH = 3000;
+const PLACEHOLDER_HEIGHT = 2000;
+
+// ─────────────────────────────────────────────────────────────────────
+// Background metadata worker
+//
+// scanFolder/walkAllImages used to synchronously process every photo's
+// sharp.metadata() + EXIF before returning. On a cold first visit to a
+// 5000-photo folder that's a ~60s wall of blank screen. The lite mode
+// returns placeholder dims immediately for cache-miss photos and enqueues
+// them here; a singleton worker drains the queue with limited concurrency
+// so sharp doesn't thrash the CPU/disk.
+//
+// Progress is tracked globally (`workDone`/`workTotal`) rather than
+// per-path because the per-request walk already builds a precise count
+// of pending items in its response — the global counters just give the
+// client a cheap polling signal.
+// ─────────────────────────────────────────────────────────────────────
+
+interface QueuedJob {
+  filePath: string;
+  relPath: string;
+}
+
+const pendingJobs = new Map<string, QueuedJob>();
+let workerActive = 0;
+let workDone = 0;
+let workTotal = 0;
+
+function enqueueMetadata(filePath: string, relPath: string): void {
+  if (metadataCache.has(filePath)) return;
+  if (pendingJobs.has(filePath)) return;
+  pendingJobs.set(filePath, { filePath, relPath });
+  workTotal++;
+  spawnWorkers();
+}
+
+function spawnWorkers(): void {
+  while (workerActive < METADATA_CONCURRENCY && pendingJobs.size > 0) {
+    workerActive++;
+    runWorker().finally(() => {
+      workerActive--;
+    });
+  }
+}
+
+async function runWorker(): Promise<void> {
+  while (true) {
+    const next = pendingJobs.values().next();
+    if (next.done) return;
+    const job = next.value;
+    pendingJobs.delete(job.filePath);
+    try {
+      await getImageInfo(job.filePath, job.relPath);
+    } catch {
+      // getImageInfo already swallows per-file errors; this is belt-and-suspenders
+    }
+    workDone++;
+    // Reset counters once everything is drained so the number stays bounded
+    // across the lifetime of the process.
+    if (pendingJobs.size === 0 && workerActive === 1) {
+      workDone = 0;
+      workTotal = 0;
+    }
+  }
+}
+
+export interface ScanProgress {
+  /** Items ever enqueued since the counters were last reset. */
+  total: number;
+  /** Items processed by the worker. */
+  done: number;
+  /** Items currently in the queue (yet to be processed). */
+  pending: number;
+}
+
+export function getScanProgress(): ScanProgress {
+  return { total: workTotal, done: workDone, pending: pendingJobs.size };
+}
+
 async function ensureMetadataDir() {
   if (metadataDirEnsured) return;
   await fs.mkdir(getMetadataCacheDir(), { recursive: true });
@@ -175,6 +262,47 @@ async function getImageInfo(
   }
 }
 
+/**
+ * Fast variant: hits in-memory + disk metadata caches only. If both miss,
+ * enqueues the file for background processing and returns a placeholder
+ * record so the UI can render immediately. The placeholder uses a generic
+ * 3:2 aspect ratio; the real dims will show up on the next scan after
+ * the worker finishes.
+ */
+async function getImageInfoFast(
+  filePath: string,
+  relativePath: string
+): Promise<ImageInfo | null> {
+  try {
+    const stat = await fs.stat(filePath);
+
+    const cached = metadataCache.get(filePath);
+    if (cached && cached.mtime === stat.mtimeMs) {
+      return cached.data;
+    }
+
+    const disk = await readDiskMeta(relativePath, stat.mtimeMs);
+    if (disk) {
+      metadataCache.set(filePath, { mtime: stat.mtimeMs, data: disk });
+      return disk;
+    }
+
+    enqueueMetadata(filePath, relativePath);
+    return {
+      name: path.basename(filePath),
+      path: relativePath,
+      width: PLACEHOLDER_WIDTH,
+      height: PLACEHOLDER_HEIGHT,
+      exif: {},
+      createdDate: stat.birthtime.toISOString(),
+      fileSize: stat.size,
+      pending: true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -194,13 +322,28 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+export interface ScanOptions {
+  /** When true, cache-miss photos return placeholder records and are
+   *  queued for background processing instead of blocking the scan. */
+  lite?: boolean;
+}
+
+export interface ScanFolderResult {
+  folders: FolderInfo[];
+  images: ImageInfo[];
+  /** Count of images in the response that are still placeholders. */
+  pendingCount: number;
+}
+
 export async function scanFolder(
   relativePath: string,
   sort: SortOrder = "captureDate",
-  direction: SortDirection = "asc"
-): Promise<{ folders: FolderInfo[]; images: ImageInfo[] }> {
+  direction: SortDirection = "asc",
+  opts: ScanOptions = {}
+): Promise<ScanFolderResult> {
   const root = getGalleryRoot();
   const absPath = path.join(root, relativePath);
+  const infoFn = opts.lite ? getImageInfoFast : getImageInfo;
 
   const entries = await fs.readdir(absPath, { withFileTypes: true });
 
@@ -234,16 +377,17 @@ export async function scanFolder(
       } as FolderInfo;
     }),
     mapWithConcurrency(imageFiles, METADATA_CONCURRENCY, ({ filePath, relPath }) =>
-      getImageInfo(filePath, relPath)
+      infoFn(filePath, relPath)
     ),
   ]);
 
   const images = imageResults.filter((img): img is ImageInfo => img !== null);
+  const pendingCount = images.reduce((n, i) => (i.pending ? n + 1 : n), 0);
 
   folders.sort((a, b) => a.name.localeCompare(b.name));
   sortImages(images, sort, direction);
 
-  return { folders, images };
+  return { folders, images, pendingCount };
 }
 
 function sortImages(
@@ -313,19 +457,31 @@ async function findBannerImage(
  * Unlike scanFolder this deliberately skips the per-folder banner hunt —
  * stats/analytics consumers only need the images themselves.
  */
+export interface WalkResult {
+  images: ImageInfo[];
+  folderCount: number;
+  /** Images in the walk that are still placeholders. */
+  pendingCount: number;
+}
+
 export async function walkAllImages(
-  relativePath: string
-): Promise<{ images: ImageInfo[]; folderCount: number }> {
+  relativePath: string,
+  opts: ScanOptions = {}
+): Promise<WalkResult> {
   const root = getGalleryRoot();
-  const acc = { images: [] as ImageInfo[], folderCount: 0 };
-  await walkDirForImages(root, relativePath, acc);
+  const acc: WalkResult = { images: [], folderCount: 0, pendingCount: 0 };
+  const infoFn = opts.lite ? getImageInfoFast : getImageInfo;
+  await walkDirForImages(root, relativePath, acc, infoFn);
   return acc;
 }
+
+type InfoFn = (filePath: string, relPath: string) => Promise<ImageInfo | null>;
 
 async function walkDirForImages(
   root: string,
   relativePath: string,
-  acc: { images: ImageInfo[]; folderCount: number }
+  acc: WalkResult,
+  infoFn: InfoFn
 ): Promise<void> {
   const absPath = path.join(root, relativePath);
   let entries: import("fs").Dirent[];
@@ -355,13 +511,16 @@ async function walkDirForImages(
   const infos = await mapWithConcurrency(
     imageJobs,
     METADATA_CONCURRENCY,
-    ({ filePath, relPath }) => getImageInfo(filePath, relPath)
+    ({ filePath, relPath }) => infoFn(filePath, relPath)
   );
   for (const info of infos) {
-    if (info) acc.images.push(info);
+    if (info) {
+      acc.images.push(info);
+      if (info.pending) acc.pendingCount++;
+    }
   }
 
   for (const sub of subDirs) {
-    await walkDirForImages(root, path.join(relativePath, sub), acc);
+    await walkDirForImages(root, path.join(relativePath, sub), acc, infoFn);
   }
 }

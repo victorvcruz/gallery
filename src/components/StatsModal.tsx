@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { BucketCount, StatsResult } from "@/lib/stats-aggregator";
+import type {
+  BucketCount,
+  StatsResponse,
+  StatsResult,
+} from "@/lib/stats-aggregator";
 
 interface StatsModalProps {
   path: string;
@@ -100,24 +104,44 @@ function Section({
 
 export default function StatsModal({ path, onClose }: StatsModalProps) {
   const [data, setData] = useState<StatsResult | null>(null);
+  const [progress, setProgress] = useState<{
+    totalInScope: number;
+    pendingInScope: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
     const url = path ? `/api/stats/${path}` : `/api/stats`;
-    fetch(url)
-      .then(async (r) => {
+
+    const tick = async () => {
+      try {
+        const r = await fetch(url);
         if (!r.ok) throw new Error(await r.text());
-        return (await r.json()) as StatsResult;
-      })
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch((e) => {
+        const json = (await r.json()) as StatsResponse;
+        if (cancelled) return;
+        if (json.status === "ready") {
+          setData(json.result);
+          setProgress(null);
+        } else {
+          setProgress({
+            totalInScope: json.totalInScope,
+            pendingInScope: json.pendingInScope,
+          });
+          // Poll until the background worker catches up with this scope.
+          timer = setTimeout(tick, 1500);
+        }
+      } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Erro");
-      });
+      }
+    };
+
+    tick();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [path]);
 
@@ -184,12 +208,43 @@ export default function StatsModal({ path, onClose }: StatsModalProps) {
               Falha ao carregar: {error}
             </p>
           )}
-          {!data && !error && (
+          {!data && !error && !progress && (
             <div className="flex items-center justify-center h-40">
               <div className="text-xs text-[var(--text-muted)] flex items-center gap-2">
                 <span className="w-3 h-3 rounded-full border-2 border-[var(--text-muted)] border-t-transparent animate-spin" />
                 Analisando fotos…
               </div>
+            </div>
+          )}
+          {!data && !error && progress && (
+            <div className="flex flex-col items-center justify-center h-40 gap-3 px-6">
+              <div className="text-xs text-[var(--text-muted)] flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full border-2 border-[var(--text-muted)] border-t-transparent animate-spin" />
+                Analisando metadados em background…
+              </div>
+              {progress.totalInScope > 0 && (
+                <>
+                  <div className="w-full max-w-md h-2 bg-[var(--bg-tertiary)] rounded overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-500"
+                      style={{
+                        width: `${
+                          ((progress.totalInScope - progress.pendingInScope) /
+                            progress.totalInScope) *
+                          100
+                        }%`,
+                      }}
+                    />
+                  </div>
+                  <p className="text-[11px] text-[var(--text-muted)] tabular-nums">
+                    {(
+                      progress.totalInScope - progress.pendingInScope
+                    ).toLocaleString()}{" "}
+                    de {progress.totalInScope.toLocaleString()} analisadas ·{" "}
+                    {progress.pendingInScope.toLocaleString()} restantes
+                  </p>
+                </>
+              )}
             </div>
           )}
           {data && (

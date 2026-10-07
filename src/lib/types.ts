@@ -18,6 +18,11 @@ export interface ImageInfo {
   createdDate?: string;
   /** Original file size in bytes. */
   fileSize?: number;
+  /** True when this record is a lightweight placeholder (dimensions are
+   *  a stand-in and EXIF is empty) because the metadata hasn't been
+   *  computed yet. The background queue will fill it in and a future
+   *  scan will return the real values. */
+  pending?: boolean;
 }
 
 export interface FolderInfo {
