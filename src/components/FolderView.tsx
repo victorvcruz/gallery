@@ -4,12 +4,11 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Header from "./Header";
 import AlbumGrid from "./AlbumGrid";
 import JustifiedGrid from "./JustifiedGrid";
-import SortControl from "./SortControl";
-import GroupControl from "./GroupControl";
+import ViewOptionsMenu from "./ViewOptionsMenu";
 import ImageViewer from "./ImageViewer";
 import SelectionBar from "./SelectionBar";
 import StatsModal from "./StatsModal";
-import PickFilter, { type PickFilter as PickFilterValue } from "./PickFilter";
+import { type PickFilter as PickFilterValue } from "./PickFilter";
 import CullingMode from "./CullingMode";
 import {
   FolderData,
@@ -331,6 +330,13 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
   );
 
   const hasImages = flatImages.length > 0;
+  // Count BEFORE pickFilter: lets us keep the toolbar + ViewOptionsMenu
+  // on screen when a filter wipes the grid empty, so the user can always
+  // undo the filter instead of being stranded on an "Empty" screen.
+  const totalImageCount = data?.images.length ?? 0;
+  const hasAnyImages = totalImageCount > 0;
+  const filterHidAll =
+    hasAnyImages && !hasImages && pickFilter !== "all";
 
   return (
     <div className="min-h-screen">
@@ -348,22 +354,50 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
 
         {data && (
           <>
-            {(data.folders.length > 0 || hasImages) && (
-              <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-4 flex-wrap">
-                <span className="text-xs text-[var(--text-muted)] flex items-center gap-2">
-                  {[
-                    data.folders.length > 0
-                      ? `${data.folders.length} pasta${data.folders.length !== 1 ? "s" : ""}`
-                      : null,
-                    hasImages
-                      ? `${flatImages.length} foto${flatImages.length !== 1 ? "s" : ""}`
-                      : null,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
+            {(data.folders.length > 0 || hasAnyImages) && (
+              <div className="sticky top-14 z-30 bg-[var(--bg-primary)]/95 backdrop-blur-sm px-4 sm:px-6 py-3 flex items-center justify-between gap-3">
+                <span className="text-xs text-[var(--text-muted)] flex items-center gap-2 min-w-0">
+                  <span className="truncate">
+                    {[
+                      data.folders.length > 0
+                        ? `${data.folders.length} pasta${data.folders.length !== 1 ? "s" : ""}`
+                        : null,
+                      hasAnyImages
+                        ? pickFilter === "all"
+                          ? `${totalImageCount} foto${totalImageCount !== 1 ? "s" : ""}`
+                          : `${flatImages.length} de ${totalImageCount}`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </span>
+                  {/* Active-view chips: shown whenever a non-default
+                      filter / grouping is applied — including when the
+                      filter wipes the grid to zero. The user can click
+                      the × to reset without having to open the menu. */}
+                  {hasAnyImages && pickFilter !== "all" && (
+                    <button
+                      onClick={() => setPickFilter("all")}
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-yellow-400/10 text-yellow-200 hover:bg-yellow-400/20 cursor-pointer"
+                      title="Clique para limpar filtro"
+                    >
+                      {pickFilter === "picks" ? "★ Picks" : "Sem pick"}
+                      <span>×</span>
+                    </button>
+                  )}
+                  {hasAnyImages && groupBy !== "none" && (
+                    <button
+                      onClick={() => setGroupBy("none")}
+                      className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-blue-400/10 text-blue-200 hover:bg-blue-400/20 cursor-pointer"
+                      title="Clique para desagrupar"
+                    >
+                      {groupBy === "day" ? "Por dia" : groupBy === "month" ? "Por mês" : "Por ano"}
+                      <span>×</span>
+                    </button>
+                  )}
                   {pendingCount > 0 && (
                     <span
-                      className="inline-flex items-center gap-1 text-[10px] text-blue-300/80"
+                      className="shrink-0 inline-flex items-center gap-1 text-[10px] text-blue-300/80"
                       title={`${pendingCount} fotos sendo analisadas em background`}
                     >
                       <span className="w-2 h-2 rounded-full border border-blue-300/80 border-t-transparent animate-spin" />
@@ -371,71 +405,59 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                     </span>
                   )}
                 </span>
-                <div className="flex items-center gap-4 flex-wrap">
+
+                <div className="flex items-center gap-1 shrink-0">
+                  {hasAnyImages && (
+                    <button
+                      onClick={() => setCullingOpen(true)}
+                      title="Entrar em modo culling (★)"
+                      aria-label="Modo culling"
+                      className="p-1.5 rounded text-yellow-200 hover:bg-yellow-400/20 transition-colors cursor-pointer"
+                    >
+                      <svg
+                        className="w-4 h-4"
+                        fill="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+                      </svg>
+                    </button>
+                  )}
                   <button
                     onClick={() => setStatsOpen(true)}
                     aria-label="Ver estatísticas"
                     title="Estatísticas"
-                    className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer p-1"
+                    className="text-[var(--text-muted)] hover:text-[var(--text-secondary)] transition-colors cursor-pointer p-1.5"
                   >
                     <svg
                       className="w-4 h-4"
                       fill="none"
                       stroke="currentColor"
+                      strokeWidth={2}
                       viewBox="0 0 24 24"
                     >
                       <path
                         strokeLinecap="round"
                         strokeLinejoin="round"
-                        strokeWidth={2}
                         d="M3 3v18h18M7 15l4-4 3 3 5-6"
                       />
                     </svg>
                   </button>
-                  {hasImages && (
-                    <>
-                      <button
-                        onClick={
-                          selectionMode ? clearSelection : enterSelectionMode
-                        }
-                        className={`text-[11px] px-2 py-1 rounded transition-colors cursor-pointer ${
-                          selectionMode
-                            ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
-                            : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                        }`}
-                      >
-                        {selectionMode ? "Cancelar seleção" : "Selecionar"}
-                      </button>
-                      <button
-                        onClick={() => setCullingOpen(true)}
-                        title="Modo culling (Tinder-like)"
-                        aria-label="Modo culling"
-                        className="text-[11px] px-2 py-1 rounded transition-colors cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-                      >
-                        Cull
-                      </button>
-                      <PickFilter
-                        value={pickFilter}
-                        onChange={setPickFilter}
-                        pickCount={starred.size}
-                      />
-                      {starred.size > 0 && (
-                        <a
-                          href="/api/picks/export"
-                          download
-                          title="Baixar CSV dos picks"
-                          className="text-[11px] px-2 py-1 rounded transition-colors cursor-pointer text-[var(--text-muted)] hover:text-[var(--text-secondary)] no-underline"
-                        >
-                          Export CSV
-                        </a>
-                      )}
-                      <GroupControl groupBy={groupBy} onChange={setGroupBy} />
-                      <SortControl
-                        sort={sort}
-                        direction={direction}
-                        onChange={handleSortChange}
-                      />
-                    </>
+                  {hasAnyImages && (
+                    <ViewOptionsMenu
+                      pickFilter={pickFilter}
+                      onPickFilterChange={setPickFilter}
+                      groupBy={groupBy}
+                      onGroupByChange={setGroupBy}
+                      sort={sort}
+                      direction={direction}
+                      onSortChange={handleSortChange}
+                      selectionMode={selectionMode}
+                      onToggleSelectionMode={
+                        selectionMode ? clearSelection : enterSelectionMode
+                      }
+                      pickCount={starred.size}
+                    />
                   )}
                 </div>
               </div>
@@ -486,10 +508,25 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
             )}
 
             {!data.folders.length && !hasImages && (
-              <div className="flex items-center justify-center h-[60vh]">
-                <p className="text-[var(--text-muted)] text-lg">
-                  This folder is empty
-                </p>
+              <div className="flex flex-col items-center justify-center h-[60vh] gap-3 px-6 text-center">
+                {filterHidAll ? (
+                  <>
+                    <p className="text-[var(--text-muted)] text-lg">
+                      Nenhuma foto corresponde ao filtro
+                      {pickFilter === "picks" ? " ★ Picks" : " Sem pick"}
+                    </p>
+                    <button
+                      onClick={() => setPickFilter("all")}
+                      className="text-xs px-3 py-1.5 rounded bg-[var(--bg-tertiary)] text-[var(--text-primary)] hover:bg-[var(--border-color)] transition-colors cursor-pointer"
+                    >
+                      Mostrar todas as {totalImageCount} foto{totalImageCount !== 1 ? "s" : ""}
+                    </button>
+                  </>
+                ) : (
+                  <p className="text-[var(--text-muted)] text-lg">
+                    This folder is empty
+                  </p>
+                )}
               </div>
             )}
           </>
