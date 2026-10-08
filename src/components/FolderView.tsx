@@ -10,6 +10,7 @@ import SelectionBar from "./SelectionBar";
 import StatsModal from "./StatsModal";
 import { type PickFilter as PickFilterValue } from "./PickFilter";
 import CullingMode from "./CullingMode";
+import TimelineScrubber from "./TimelineScrubber";
 import {
   FolderData,
   GroupBy,
@@ -480,6 +481,7 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                     selectedPaths={selectedPaths}
                     onToggleSelect={toggleSelect}
                     starredPaths={starred}
+                    startIndex={0}
                   />
                 ) : (
                   groups.map((group, gi) => (
@@ -500,6 +502,8 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
                         selectionMode={selectionMode}
                         selectedPaths={selectedPaths}
                         onToggleSelect={toggleSelect}
+                        starredPaths={starred}
+                        startIndex={groupOffsets[gi]}
                       />
                     </div>
                   ))
@@ -532,6 +536,13 @@ export default function FolderView({ path, initialImage }: FolderViewProps) {
           </>
         )}
       </main>
+
+      {/* Timeline scrubber: hidden automatically when there's nothing to
+          orient around (no dates, tiny set) and when a modal is open (the
+          modals use z-50 which covers z-20). */}
+      {hasImages && !viewerName && !cullingOpen && !selectionMode && (
+        <TimelineScrubber images={flatImages} />
+      )}
 
       {viewerIndex !== null && hasImages && (
         <ImageViewer

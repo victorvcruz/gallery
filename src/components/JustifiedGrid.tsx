@@ -12,6 +12,10 @@ interface JustifiedGridProps {
   selectedPaths?: Set<string>;
   onToggleSelect?: (path: string) => void;
   starredPaths?: Set<string>;
+  /** Index of `images[0]` within the parent's flattened image list. Used so
+   *  the TimelineScrubber can jump by *global* index even when images are
+   *  split across multiple grids by date grouping. */
+  startIndex?: number;
 }
 
 interface LayoutBox {
@@ -33,6 +37,7 @@ export default function JustifiedGrid({
   selectedPaths,
   onToggleSelect,
   starredPaths,
+  startIndex = 0,
 }: JustifiedGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState(0);
@@ -91,6 +96,7 @@ export default function JustifiedGrid({
               <div
                 key={img.path}
                 className="group absolute cursor-pointer"
+                data-image-index={startIndex + index}
                 style={{
                   top: box.top,
                   left: box.left,
