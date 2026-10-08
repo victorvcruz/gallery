@@ -192,6 +192,19 @@ export default function CullingMode({
         .reduce((n, i) => (starredPaths.has(i.path) ? n + 1 : n), 0),
     [images, index, starredPaths]
   );
+  // Last few photos the user starred while moving forward through this
+  // cull. Walking backward from the current index keeps the ordering
+  // "newest first" which matches how the dock reads left→right (latest
+  // on the left, oldest on the right). Capped at 6 to leave room for
+  // the main card on even the narrowest mobile viewport.
+  const RECENT_PICKS_LIMIT = 6;
+  const recentPicks = useMemo(() => {
+    const picks: ImageInfo[] = [];
+    for (let i = index - 1; i >= 0 && picks.length < RECENT_PICKS_LIMIT; i--) {
+      if (starredPaths.has(images[i].path)) picks.push(images[i]);
+    }
+    return picks;
+  }, [images, index, starredPaths]);
   const done = index >= images.length;
 
   if (done) {
@@ -319,6 +332,50 @@ export default function CullingMode({
           </div>
         </div>
       </div>
+
+      {/* Recent picks dock — tap a thumb to instantly un-star it. Lets
+          the user "take back" a star when a better shot of the same
+          scene shows up a few photos later, without having to swipe
+          back through the deck. */}
+      {recentPicks.length > 0 && (
+        <div className="px-3 pt-2 pb-1 flex items-center gap-2 overflow-x-auto">
+          <span className="text-[10px] uppercase tracking-wider text-white/40 shrink-0 pl-1">
+            Picks
+          </span>
+          {recentPicks.map((img) => (
+            <button
+              key={img.path}
+              onClick={() => onToggleStar(img.path)}
+              aria-label={`Remover pick de ${img.name}`}
+              title={`Tap para remover pick · ${img.name}`}
+              className="relative shrink-0 w-12 h-12 sm:w-14 sm:h-14 rounded overflow-hidden ring-2 ring-yellow-400 cursor-pointer active:scale-90 transition-transform group"
+            >
+              <img
+                src={`/api/image/${img.path}?size=thumb`}
+                alt=""
+                className="absolute inset-0 w-full h-full object-cover"
+                draggable={false}
+              />
+              {/* Remove indicator — subtle on desktop (hover), tap-tap
+                  obvious on mobile via the active:scale animation. */}
+              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition-colors flex items-center justify-center">
+                <svg
+                  className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={2.5}
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </div>
+              <span className="absolute top-0.5 right-0.5 text-yellow-300 drop-shadow-[0_1px_1px_rgba(0,0,0,0.9)] text-[10px]">
+                ★
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Action bar */}
       <div className="flex items-center justify-center gap-8 py-4 sm:py-6 pb-[env(safe-area-inset-bottom,16px)]">
