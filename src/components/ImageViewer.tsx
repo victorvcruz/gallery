@@ -25,6 +25,12 @@ export default function ImageViewer({
   onToggleStar,
 }: ImageViewerProps) {
   const [loadedSrc, setLoadedSrc] = useState<string | null>(null);
+  const [naturalSize, setNaturalSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const naturalSizeRef = useRef(naturalSize);
+  naturalSizeRef.current = naturalSize;
   const currentImage = images[currentIndex];
 
   const {
@@ -35,9 +41,14 @@ export default function ImageViewer({
     handleMouseMove,
     handleMouseUp,
     handleDoubleClick,
+    handleTouchStart: handleZoomTouchStart,
+    handleTouchMove: handleZoomTouchMove,
+    handleTouchEnd: handleZoomTouchEnd,
     resetZoom,
     containerRef,
-  } = useImageZoom();
+  } = useImageZoom({
+    getNaturalSize: () => naturalSizeRef.current,
+  });
 
   const goToPrev = useCallback(() => {
     if (currentIndex > 0) {
@@ -80,31 +91,57 @@ export default function ImageViewer({
     return () => window.removeEventListener("keydown", handler);
   }, [onToggleStar]);
 
-  // Touch/swipe support
+  // Touch/swipe support. The zoom hook gets first dibs on every touch —
+  // if it claims the event (pinch, pan while zoomed, or double-tap), we
+  // skip swipe handling for that gesture entirely.
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (isZoomed) return;
-    const touch = e.touches[0];
-    touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
-  }, [isZoomed]);
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      const consumed = handleZoomTouchStart(e);
+      if (consumed) {
+        touchStartRef.current = null;
+        return;
+      }
+      if (isZoomed) return;
+      const touch = e.touches[0];
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+    },
+    [handleZoomTouchStart, isZoomed]
+  );
 
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (isZoomed || !touchStartRef.current) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - touchStartRef.current.x;
-    const dy = touch.clientY - touchStartRef.current.y;
-    const dt = Date.now() - touchStartRef.current.time;
-    touchStartRef.current = null;
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      const consumed = handleZoomTouchMove(e);
+      if (consumed) touchStartRef.current = null;
+    },
+    [handleZoomTouchMove]
+  );
 
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) && dt < 400) {
-      if (dx > 0) goToPrev();
-      else goToNext();
-    }
-  }, [isZoomed, goToPrev, goToNext]);
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      const consumed = handleZoomTouchEnd(e);
+      if (consumed || isZoomed || !touchStartRef.current) {
+        touchStartRef.current = null;
+        return;
+      }
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - touchStartRef.current.x;
+      const dy = touch.clientY - touchStartRef.current.y;
+      const dt = Date.now() - touchStartRef.current.time;
+      touchStartRef.current = null;
+
+      if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) && dt < 400) {
+        if (dx > 0) goToPrev();
+        else goToNext();
+      }
+    },
+    [handleZoomTouchEnd, isZoomed, goToPrev, goToNext]
+  );
 
   useEffect(() => {
     setLoadedSrc(null);
+    setNaturalSize(null);
   }, [currentIndex]);
 
   useEffect(() => {
@@ -233,10 +270,11 @@ export default function ImageViewer({
         </button>
       </div>
 
-      {/* Image container */}
+      {/* Image container. `touch-none` disables the browser's default pan /
+          pinch so our hook handles pinch-zoom and we handle swipe-to-nav. */}
       <div
         ref={containerRef}
-        className={`relative w-full h-full flex items-center justify-center select-none ${
+        className={`relative w-full h-full flex items-center justify-center select-none touch-none ${
           isZoomed ? "cursor-grab active:cursor-grabbing" : "cursor-default"
         }`}
         onWheel={handleWheel}
@@ -246,6 +284,7 @@ export default function ImageViewer({
         onMouseLeave={handleMouseUp}
         onDoubleClick={handleDoubleClick}
         onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
       >
         {/* Low-res thumb backdrop — served instantly from the browser cache
@@ -273,8 +312,15 @@ export default function ImageViewer({
             transform: `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`,
             willChange: "transform",
           }}
-          onLoad={() => {
+          onLoad={(e) => {
             if (!loadedSrc) setLoadedSrc(previewSrc);
+            const img = e.currentTarget;
+            if (img.naturalWidth && img.naturalHeight) {
+              setNaturalSize({
+                width: img.naturalWidth,
+                height: img.naturalHeight,
+              });
+            }
           }}
           draggable={false}
         />

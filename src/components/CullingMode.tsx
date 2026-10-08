@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ImageInfo } from "@/lib/types";
+import { useImageZoom } from "@/hooks/useImageZoom";
 
 interface CullingModeProps {
   images: ImageInfo[];
@@ -62,9 +63,33 @@ export default function CullingMode({
   );
   const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null);
   const [flying, setFlying] = useState<"left" | "right" | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [naturalSize, setNaturalSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const naturalSizeRef = useRef(naturalSize);
+  naturalSizeRef.current = naturalSize;
   const touchStart = useRef<{ x: number; y: number } | null>(null);
   const history = useRef<{ index: number; decision: Decision }[]>([]);
+
+  const {
+    zoomState,
+    isZoomed,
+    handleTouchStart: handleZoomTouchStart,
+    handleTouchMove: handleZoomTouchMove,
+    handleTouchEnd: handleZoomTouchEnd,
+    handleDoubleClick: handleZoomDoubleClick,
+    handleWheel: handleZoomWheel,
+    handleMouseDown: handleZoomMouseDown,
+    handleMouseMove: handleZoomMouseMove,
+    handleMouseUp: handleZoomMouseUp,
+    resetZoom,
+    containerRef: zoomContainerRef,
+  } = useImageZoom({ getNaturalSize: () => naturalSizeRef.current });
+
+  // The swipe layer still needs a ref to measure width; it's the same
+  // element the zoom hook uses, so share one ref.
+  const containerRef = zoomContainerRef;
 
   const current = images[index];
   const containerWidth = containerRef.current?.clientWidth ?? 1;
@@ -79,6 +104,7 @@ export default function CullingMode({
         onToggleStar(current.path);
       }
       history.current.push({ index, decision });
+      resetZoom();
       // Fly-off animation, then advance.
       setFlying(decision === "star" ? "right" : "left");
       window.setTimeout(() => {
@@ -87,7 +113,7 @@ export default function CullingMode({
         setIndex((i) => Math.min(images.length, i + 1));
       }, 180);
     },
-    [current, index, images.length, starredPaths, onToggleStar]
+    [current, index, images.length, starredPaths, onToggleStar, resetZoom]
   );
 
   const undo = useCallback(() => {
@@ -103,10 +129,18 @@ export default function CullingMode({
         onToggleStar(target.path);
       }
     }
+    resetZoom();
     setIndex(last.index);
     setDrag(null);
     setFlying(null);
-  }, [images, starredPaths, onToggleStar]);
+  }, [images, starredPaths, onToggleStar, resetZoom]);
+
+  // Any time the shown photo changes, drop the zoom + the natural size we
+  // remembered — the next image owns its own dimensions.
+  useEffect(() => {
+    resetZoom();
+    setNaturalSize(null);
+  }, [index, resetZoom]);
 
   // Keyboard controls
   useEffect(() => {
@@ -156,22 +190,42 @@ export default function CullingMode({
     }
   }, [index, images]);
 
-  // Touch handlers
+  // Touch handlers. The zoom hook gets first dibs on every touch — if it
+  // claims the gesture (pinch, pan while zoomed, double-tap), we don't
+  // interpret it as a swipe.
   const onTouchStart = (e: React.TouchEvent) => {
     if (flying) return;
+    const consumed = handleZoomTouchStart(e);
+    if (consumed || isZoomed) {
+      touchStart.current = null;
+      setDrag(null);
+      return;
+    }
     const t = e.touches[0];
     touchStart.current = { x: t.clientX, y: t.clientY };
     setDrag({ dx: 0, dy: 0 });
   };
   const onTouchMove = (e: React.TouchEvent) => {
-    if (!touchStart.current || flying) return;
+    const consumed = handleZoomTouchMove(e);
+    if (consumed) {
+      touchStart.current = null;
+      setDrag(null);
+      return;
+    }
+    if (!touchStart.current || flying || isZoomed) return;
     const t = e.touches[0];
     setDrag({
       dx: t.clientX - touchStart.current.x,
       dy: t.clientY - touchStart.current.y,
     });
   };
-  const onTouchEnd = () => {
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const consumed = handleZoomTouchEnd(e);
+    if (consumed || isZoomed) {
+      touchStart.current = null;
+      setDrag(null);
+      return;
+    }
     if (!drag || flying) return;
     const threshold = containerWidth * SWIPE_COMMIT_FRACTION;
     if (Math.abs(drag.dx) > threshold) {
@@ -299,37 +353,66 @@ export default function CullingMode({
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
+        onWheel={handleZoomWheel}
+        onDoubleClick={handleZoomDoubleClick}
+        onMouseDown={handleZoomMouseDown}
+        onMouseMove={handleZoomMouseMove}
+        onMouseUp={handleZoomMouseUp}
+        onMouseLeave={handleZoomMouseUp}
       >
-        {/* Card itself */}
+        {/* Card itself. The outer card owns the swipe transform; the
+            inner wrapper owns the zoom transform so the two don't fight. */}
         <div
           className="absolute inset-4 rounded-xl overflow-hidden bg-neutral-900"
           style={{ transform, transition, willChange: "transform" }}
         >
-          <img
-            src={thumbSrc}
-            aria-hidden
-            className="absolute inset-0 w-full h-full object-contain"
-            draggable={false}
-          />
-          <img
-            src={previewSrc}
-            alt={current.name}
-            className="absolute inset-0 w-full h-full object-contain"
-            draggable={false}
-          />
-          {/* Decision hints overlay */}
           <div
-            className="absolute top-6 left-6 border-4 border-red-500 text-red-500 text-2xl font-bold px-3 py-1 rounded rotate-[-12deg] pointer-events-none transition-opacity"
-            style={{ opacity: leftHint }}
+            className="absolute inset-0"
+            style={{
+              transform: `translate(${zoomState.translateX}px, ${zoomState.translateY}px) scale(${zoomState.scale})`,
+              willChange: "transform",
+            }}
           >
-            NOPE
+            <img
+              src={thumbSrc}
+              aria-hidden
+              className="absolute inset-0 w-full h-full object-contain"
+              draggable={false}
+            />
+            <img
+              src={previewSrc}
+              alt={current.name}
+              className="absolute inset-0 w-full h-full object-contain"
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                if (img.naturalWidth && img.naturalHeight) {
+                  setNaturalSize({
+                    width: img.naturalWidth,
+                    height: img.naturalHeight,
+                  });
+                }
+              }}
+              draggable={false}
+            />
           </div>
-          <div
-            className="absolute top-6 right-6 border-4 border-yellow-400 text-yellow-400 text-2xl font-bold px-3 py-1 rounded rotate-[12deg] pointer-events-none transition-opacity"
-            style={{ opacity: rightHint }}
-          >
-            ★ PICK
-          </div>
+          {/* Decision hints overlay — hidden while zoomed so they don't
+              fight the zoom gesture visually. */}
+          {!isZoomed && (
+            <>
+              <div
+                className="absolute top-6 left-6 border-4 border-red-500 text-red-500 text-2xl font-bold px-3 py-1 rounded rotate-[-12deg] pointer-events-none transition-opacity"
+                style={{ opacity: leftHint }}
+              >
+                NOPE
+              </div>
+              <div
+                className="absolute top-6 right-6 border-4 border-yellow-400 text-yellow-400 text-2xl font-bold px-3 py-1 rounded rotate-[12deg] pointer-events-none transition-opacity"
+                style={{ opacity: rightHint }}
+              >
+                ★ PICK
+              </div>
+            </>
+          )}
         </div>
       </div>
 
